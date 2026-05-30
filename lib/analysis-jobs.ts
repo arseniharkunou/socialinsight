@@ -8,7 +8,9 @@ type InternalJob = AnalyzeJobSnapshot & {
   abortController: AbortController;
 };
 
-const REPORT_DIR = path.join(process.cwd(), "output", "reports");
+const REPORT_DIR = process.env.VERCEL
+  ? path.join("/tmp", "social-insight", "reports")
+  : path.join(process.cwd(), "output", "reports");
 const jobs = globalThis as typeof globalThis & {
   __painRadarJobs?: Map<string, InternalJob>;
 };
@@ -46,7 +48,7 @@ export function startAnalysisJob(input: AnalysisJobInput) {
   };
 
   jobMap().set(id, job);
-  void persistJob(job);
+  persistJob(job).catch(() => undefined);
   void runJob(job, input);
   return publicJob(job);
 }
@@ -106,7 +108,7 @@ async function runJob(job: InternalJob, input: AnalysisJobInput) {
 function updateJob(job: InternalJob, patch: Partial<Omit<AnalyzeJobSnapshot, "id" | "createdAt">>) {
   Object.assign(job, patch, { updatedAt: new Date().toISOString() });
   jobMap().set(job.id, job);
-  void persistJob(job);
+  persistJob(job).catch(() => undefined);
 }
 
 function updatePreviewQuotes(job: InternalJob, previewQuotes: LiveQuotePreview[]) {

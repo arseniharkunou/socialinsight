@@ -2,6 +2,9 @@
   "name": "social-insight",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20.11 <23"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -10,20 +13,20 @@
     "check:integrations": "node scripts/check-integrations.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "@tailwindcss/postcss": "latest",
-    "lucide-react": "latest",
-    "next": "latest",
-    "react": "latest",
-    "react-dom": "latest",
-    "tailwindcss": "latest"
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@tailwindcss/postcss": "4.3.0",
+    "lucide-react": "1.17.0",
+    "next": "16.2.6",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "tailwindcss": "4.3.0"
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "eslint": "latest",
-    "eslint-config-next": "latest",
-    "typescript": "latest"
+    "@types/node": "25.9.1",
+    "@types/react": "19.2.15",
+    "@types/react-dom": "19.2.3",
+    "eslint": "9.39.4",
+    "eslint-config-next": "16.2.6",
+    "typescript": "6.0.3"
   }
 }
