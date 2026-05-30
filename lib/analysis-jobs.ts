@@ -27,6 +27,22 @@ type AnalysisJobInput = { url: string; analysisMode?: AnalysisMode; timeWindow?:
 const DEFAULT_SUPPORTED_SOURCES = SUPPORTED_SOURCE_OPTIONS.map((source) => source.value);
 
 export function startAnalysisJob(input: AnalysisJobInput) {
+  const job = createInternalJob(input);
+  jobMap().set(job.id, job);
+  persistJob(job).catch(() => undefined);
+  void runJob(job, input);
+  return publicJob(job);
+}
+
+export async function runAnalysisJobInline(input: AnalysisJobInput) {
+  const job = createInternalJob(input);
+  jobMap().set(job.id, job);
+  persistJob(job).catch(() => undefined);
+  await runJob(job, input);
+  return publicJob(job);
+}
+
+function createInternalJob(input: AnalysisJobInput): InternalJob {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const abortController = new AbortController();
@@ -46,11 +62,7 @@ export function startAnalysisJob(input: AnalysisJobInput) {
     updatedAt: now,
     abortController,
   };
-
-  jobMap().set(id, job);
-  persistJob(job).catch(() => undefined);
-  void runJob(job, input);
-  return publicJob(job);
+  return job;
 }
 
 export async function getAnalysisJob(id: string) {

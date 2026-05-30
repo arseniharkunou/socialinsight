@@ -157,6 +157,18 @@ export default function Home() {
         throw new Error(startPayload.error);
       }
       jobIdRef.current = startPayload.job.id;
+      if (startPayload.job.status === "completed" && startPayload.job.report) {
+        setProgressIndex(progressSteps.length);
+        setReport({
+          ...startPayload.job.report,
+          analysisMode: startPayload.job.report.analysisMode || startPayload.job.analysisMode,
+          searchDepth: startPayload.job.report.searchDepth || startPayload.job.searchDepth,
+        });
+        return;
+      }
+      if (startPayload.job.status === "failed" || startPayload.job.status === "cancelled") {
+        throw new Error(startPayload.job.error || "Analysis failed");
+      }
 
       await pollAnalysisJob(startPayload.job.id, controller.signal, async (payload) => {
         if (!payload.ok) {
