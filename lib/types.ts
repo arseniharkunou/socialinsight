@@ -197,6 +197,10 @@ export type AnalyzeStreamEvent =
       stage: AnalyzeProgressStage;
     }
   | {
+      type: "preview_quotes";
+      quotes: LiveQuotePreview[];
+    }
+  | {
       type: "complete";
       report: PainRadarReport;
     }

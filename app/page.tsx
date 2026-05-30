@@ -26,7 +26,7 @@ import { useEffect, useRef, useMemo, useState } from "react";
 import type { CSSProperties, FormEvent } from "react";
 import { displayExecutiveSummary, reportTitle } from "@/lib/report-title";
 import { SEARCH_DEPTH_OPTIONS, SUPPORTED_SOURCE_OPTIONS, TIME_WINDOW_OPTIONS } from "@/lib/types";
-import type { AnalysisMode, AnalyzeJobResponse, AnalyzeProgressStage, Evidence, LiveQuotePreview, PainPoint, PainRadarReport, SearchDepth, SupportedSource, TimeWindow } from "@/lib/types";
+import type { AnalysisMode, AnalyzeProgressStage, AnalyzeStreamEvent, Evidence, LiveQuotePreview, PainPoint, PainRadarReport, SearchDepth, SupportedSource, TimeWindow } from "@/lib/types";
 
 const progressSteps = [
   { stage: "website", label: "Target setup", icon: Globe2 },
@@ -126,7 +126,6 @@ export default function Home() {
   const [progressIndex, setProgressIndex] = useState(0);
   const [previewQuotes, setPreviewQuotes] = useState<LiveQuotePreview[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const jobIdRef = useRef<string | null>(null);
   const previewQuotesShownAtRef = useRef<number | null>(null);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -146,63 +145,60 @@ export default function Home() {
     previewQuotesShownAtRef.current = null;
 
     try {
-      const response = await fetch("/api/analyze", {
+      const response = await fetch("/api/analyze/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url, analysisMode, timeWindow, searchDepth, sources: selectedSources }),
         signal: controller.signal,
       });
-      const startPayload = await readJobResponse(response);
-      if (!startPayload.ok) {
-        throw new Error(startPayload.error);
-      }
-      jobIdRef.current = startPayload.job.id;
-      if (startPayload.job.status === "completed" && startPayload.job.report) {
-        setProgressIndex(progressSteps.length);
-        setReport({
-          ...startPayload.job.report,
-          analysisMode: startPayload.job.report.analysisMode || startPayload.job.analysisMode,
-          searchDepth: startPayload.job.report.searchDepth || startPayload.job.searchDepth,
-        });
-        return;
-      }
-      if (startPayload.job.status === "failed" || startPayload.job.status === "cancelled") {
-        throw new Error(startPayload.job.error || "Analysis failed");
+
+      if (!response.ok || !response.body) {
+        throw new Error(await readAnalysisStreamError(response));
       }
 
-      await pollAnalysisJob(startPayload.job.id, controller.signal, async (payload) => {
-        if (!payload.ok) {
-          throw new Error(payload.error);
+      let completed = false;
+      await readAnalysisStream(response, controller.signal, async (event) => {
+        if (event.type === "progress") {
+          setProgressIndex(progressStageIndexes[event.stage]);
+          return;
         }
-        const job = payload.job;
-        setProgressIndex(job.status === "completed" ? progressSteps.length : progressStageIndexes[job.stage]);
-        if (job.previewQuotes?.length) {
-          setPreviewQuotes((currentQuotes) => mergePreviewQuotes(currentQuotes, job.previewQuotes || []));
+
+        if (event.type === "preview_quotes") {
+          setPreviewQuotes((currentQuotes) => mergePreviewQuotes(currentQuotes, event.quotes));
           previewQuotesShownAtRef.current = previewQuotesShownAtRef.current ?? Date.now();
+          return;
         }
-        if (job.status === "completed" && job.report) {
-          if (job.previewQuotes?.length) {
-            const shownAt = previewQuotesShownAtRef.current ?? Date.now();
-            const remainingPreviewMs = Math.max(0, MIN_QUOTE_PREVIEW_MS - (Date.now() - shownAt));
-            if (remainingPreviewMs > 0) {
-              await delay(remainingPreviewMs, controller.signal);
-            }
+
+        if (event.type === "complete") {
+          const shownAt = previewQuotesShownAtRef.current;
+          const remainingPreviewMs = shownAt ? Math.max(0, MIN_QUOTE_PREVIEW_MS - (Date.now() - shownAt)) : 0;
+          if (remainingPreviewMs > 0) {
+            await delay(remainingPreviewMs, controller.signal);
           }
-          setReport({ ...job.report, analysisMode: job.report.analysisMode || job.analysisMode, searchDepth: job.report.searchDepth || job.searchDepth });
-          return true;
+          setProgressIndex(progressSteps.length);
+          setReport({
+            ...event.report,
+            analysisMode: event.report.analysisMode || analysisMode,
+            searchDepth: event.report.searchDepth || searchDepth,
+          });
+          completed = true;
+          return;
         }
-        if (job.status === "failed" || job.status === "cancelled") {
-          throw new Error(job.error || "Analysis failed");
+
+        if (event.type === "error") {
+          throw new Error(event.error);
         }
-        return false;
       });
+
+      if (!completed && !controller.signal.aborted) {
+        throw new Error("Analysis stream ended before a report was generated.");
+      }
     } catch (reason) {
       setError(describeAnalysisError(reason));
     } finally {
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null;
       }
-      jobIdRef.current = null;
       setLoading(false);
     }
   }
@@ -273,30 +269,53 @@ function ExplorationField({ progressIndex }: { progressIndex: number }) {
   );
 }
 
-async function readJobResponse(response: Response) {
-  const payload = (await response.json().catch(() => null)) as AnalyzeJobResponse | null;
-  if (!response.ok || !payload) {
-    if (payload?.ok === false) {
-      throw new Error(`Analysis API returned ${response.status}: ${payload.error}`);
-    }
-    throw new Error(`Analysis API returned HTTP ${response.status}.`);
+async function readAnalysisStream(response: Response, signal: AbortSignal, onEvent: (event: AnalyzeStreamEvent) => void | Promise<void>) {
+  if (!response.body) {
+    throw new Error("Analysis API did not return a stream.");
   }
-  return payload;
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  async function readEvents(chunk: string) {
+    buffer += chunk;
+    const eventBlocks = buffer.split("\n\n");
+    buffer = eventBlocks.pop() || "";
+
+    for (const block of eventBlocks) {
+      const dataLine = block.split("\n").find((line) => line.startsWith("data: "));
+      if (!dataLine) {
+        continue;
+      }
+      await onEvent(JSON.parse(dataLine.slice("data: ".length)) as AnalyzeStreamEvent);
+    }
+  }
+
+  while (!signal.aborted) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    await readEvents(decoder.decode(value, { stream: true }));
+  }
+
+  await readEvents(decoder.decode());
 }
 
-async function pollAnalysisJob(
-  jobId: string,
-  signal: AbortSignal,
-  onUpdate: (payload: AnalyzeJobResponse) => boolean | Promise<boolean>,
-) {
-  while (!signal.aborted) {
-    const response = await fetch(`/api/analyze/${encodeURIComponent(jobId)}`, { signal });
-    const done = await onUpdate(await readJobResponse(response));
-    if (done) {
-      return;
+async function readAnalysisStreamError(response: Response) {
+  const text = await response.text().catch(() => "");
+  if (text) {
+    try {
+      const payload = JSON.parse(text) as { error?: string };
+      if (payload.error) {
+        return `Analysis API returned ${response.status}: ${payload.error}`;
+      }
+    } catch {
+      return `Analysis API returned HTTP ${response.status}: ${text.slice(0, 180)}`;
     }
-    await delay(1400, signal);
   }
+  return `Analysis API returned HTTP ${response.status}.`;
 }
 
 function delay(ms: number, signal: AbortSignal) {
