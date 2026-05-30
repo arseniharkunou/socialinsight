@@ -1,0 +1,292 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f7faf5;
+  --foreground: #111411;
+  --surface: #ffffff;
+  --surface-muted: #f1f7ef;
+  --border: #d7e5d3;
+  --muted: #5f6f62;
+  --primary: #12a83f;
+  --primary-rgb: 18, 168, 63;
+  --primary-soft: #dff7e6;
+  --teal: var(--primary);
+  --teal-soft: var(--primary-soft);
+  --amber: #b7791f;
+  --amber-soft: #f8e8c3;
+  --crimson: #b4233a;
+  --crimson-soft: #f7d5dc;
+  --ink: #151814;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--background);
+}
+
+body {
+  margin: 0;
+  color: var(--foreground);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(247, 250, 245, 0.95)),
+    radial-gradient(circle at 18% -12%, rgba(var(--primary-rgb), 0.14), transparent 28%),
+    radial-gradient(circle at 84% 4%, rgba(183, 121, 31, 0.12), transparent 22%),
+    var(--background);
+  font-family: Arial, Helvetica, sans-serif;
+  letter-spacing: 0;
+}
+
+@layer components {
+  .title-serif {
+    font-family: Georgia, "Times New Roman", Times, serif;
+    letter-spacing: 0;
+  }
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+::selection {
+  background: var(--teal-soft);
+}
+
+.scrollbar-thin {
+  scrollbar-color: #bdc6ba transparent;
+  scrollbar-width: thin;
+}
+
+.signal-grid {
+  background-image:
+    linear-gradient(rgba(17, 20, 17, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(17, 20, 17, 0.04) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+.analysis-transition {
+  animation: analysis-surface-in 280ms ease-out both;
+}
+
+.live-quote-fade {
+  animation: live-quote-fade 4.2s ease-in-out both;
+  text-shadow: 0 1px 18px rgba(255, 255, 255, 0.9);
+}
+
+.exploration-field {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  --analysis-base: rgba(240, 248, 244, 0.9);
+  --analysis-tint: rgba(var(--primary-rgb), 0.2);
+  --analysis-warm: rgba(183, 121, 31, 0.14);
+  --analysis-line: rgba(var(--primary-rgb), 0.15);
+  --analysis-node: rgba(var(--primary-rgb), 0.76);
+  background:
+    linear-gradient(125deg, var(--analysis-base), rgba(255, 255, 255, 0.72) 42%, rgba(239, 246, 241, 0.86)),
+    repeating-linear-gradient(90deg, transparent 0 42px, var(--analysis-line) 43px, transparent 44px),
+    repeating-linear-gradient(0deg, transparent 0 42px, rgba(17, 20, 17, 0.05) 43px, transparent 44px);
+  transition: background-color 800ms ease, filter 800ms ease;
+}
+
+.exploration-field[data-stage="market"] {
+  --analysis-base: rgba(238, 247, 242, 0.94);
+  --analysis-tint: rgba(var(--primary-rgb), 0.24);
+  --analysis-warm: rgba(183, 121, 31, 0.12);
+}
+
+.exploration-field[data-stage="queries"] {
+  --analysis-base: rgba(235, 246, 242, 0.96);
+  --analysis-tint: rgba(var(--primary-rgb), 0.3);
+  --analysis-warm: rgba(183, 121, 31, 0.22);
+  --analysis-line: rgba(var(--primary-rgb), 0.2);
+  filter: saturate(1.08);
+}
+
+.exploration-field[data-stage="brightdata"] {
+  --analysis-base: rgba(244, 248, 238, 0.94);
+  --analysis-tint: rgba(var(--primary-rgb), 0.18);
+  --analysis-warm: rgba(183, 121, 31, 0.24);
+  --analysis-line: rgba(183, 121, 31, 0.16);
+}
+
+.exploration-field[data-stage="synthesis"] {
+  --analysis-base: rgba(241, 245, 244, 0.94);
+  --analysis-tint: rgba(var(--primary-rgb), 0.2);
+  --analysis-warm: rgba(180, 35, 58, 0.13);
+  --analysis-line: rgba(var(--primary-rgb), 0.17);
+}
+
+.exploration-field::before {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background:
+    linear-gradient(105deg, transparent 0 28%, var(--analysis-tint) 39%, transparent 52%),
+    linear-gradient(255deg, transparent 0 38%, var(--analysis-warm) 49%, transparent 62%);
+  background-size: 220% 100%, 180% 100%;
+  opacity: 0.72;
+  animation: analysis-sweep 4.8s ease-in-out infinite;
+}
+
+.exploration-field::after {
+  content: none;
+}
+
+.analysis-lanes {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.analysis-lane {
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  top: var(--lane-y);
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, rgba(var(--primary-rgb), 0.17), transparent);
+  opacity: 0.52;
+}
+
+.analysis-lane::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  width: 36%;
+  background: linear-gradient(90deg, transparent, rgba(var(--primary-rgb), 0.74), rgba(255, 255, 255, 0.88), transparent);
+  transform: translateX(-120%);
+  animation: analysis-lane-scan 3.2s ease-in-out infinite;
+  animation-delay: var(--lane-delay);
+}
+
+@keyframes analysis-sweep {
+  0%,
+  100% {
+    background-position: -120% 0, 160% 0;
+    opacity: 0.46;
+  }
+
+  45% {
+    background-position: 58% 0, 24% 0;
+    opacity: 0.9;
+  }
+
+  70% {
+    background-position: 122% 0, -48% 0;
+    opacity: 0.62;
+  }
+}
+
+@keyframes analysis-lane-scan {
+  0%,
+  100% {
+    transform: translateX(-120%);
+    opacity: 0;
+  }
+
+  18% {
+    opacity: 1;
+  }
+
+  66% {
+    opacity: 1;
+  }
+
+  82% {
+    transform: translateX(300%);
+    opacity: 0;
+  }
+}
+
+@keyframes analysis-surface-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes live-quote-fade {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  18%,
+  72% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes exploration-breathe {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+
+  50% {
+    opacity: 0.9;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .exploration-field,
+  .exploration-field::before,
+  .analysis-lane::after,
+  .live-quote-fade,
+  .analysis-transition {
+    animation: none;
+  }
+}
+
+@media print {
+  html,
+  body {
+    background: #ffffff !important;
+  }
+
+  body {
+    color: #111411 !important;
+  }
+
+  main,
+  section,
+  div,
+  article,
+  details,
+  footer {
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+  }
+
+  .signal-grid {
+    background-image: none !important;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+}
