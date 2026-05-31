@@ -52,9 +52,13 @@ export function extractEvidenceCards(signals: MarketSignal[], market: MarketProf
       const score = evidenceScore(signal, market, index);
       const quote = strongestQuote(signal);
       const labels = evidenceLabels(signal);
+      const fullText = preserveFullText(signal);
       return {
         ...signal,
         title: truncate(signal.title, 160),
+        fullText,
+        sourceContext: signal.sourceContext || sourceMetricText(signal),
+        displayQuote: quote,
         snippet: buildEvidenceSnippet(signal, quote, labels),
         confidence: Math.max(signal.confidence, Math.min(96, Math.round(score))),
         position: index + 1,
@@ -137,7 +141,7 @@ function sourceFamily(signal: MarketSignal): "reddit" | "linkedin" | "x" | "yout
 }
 
 function evidenceScore(signal: MarketSignal, market: MarketProfile, index: number) {
-  const text = `${signal.title} ${signal.snippet}`.toLowerCase();
+  const text = evidenceText(signal).toLowerCase();
   const sourceWeight = SOURCE_WEIGHTS[signal.sourceType] || 8;
   const painScore = countMatches(text, PAIN_TERMS) * 4;
   const requestScore = countMatches(text, REQUEST_TERMS) * 5;
@@ -151,7 +155,7 @@ function evidenceScore(signal: MarketSignal, market: MarketProfile, index: numbe
 }
 
 function evidenceLabels(signal: MarketSignal) {
-  const text = `${signal.title} ${signal.snippet}`.toLowerCase();
+  const text = evidenceText(signal).toLowerCase();
   const labels: string[] = [];
   if (hasAny(text, PAIN_TERMS)) labels.push("pain signal");
   if (hasAny(text, REQUEST_TERMS)) labels.push("feature request");
@@ -168,7 +172,7 @@ function evidenceLabels(signal: MarketSignal) {
 }
 
 function strongestQuote(signal: MarketSignal) {
-  const cleaned = `${signal.title}. ${signal.snippet}`
+  const cleaned = evidenceText(signal)
     .replace(/\s+/g, " ")
     .replace(/\b(Read more|View full|Continue reading)\b/gi, "")
     .trim();
@@ -183,6 +187,26 @@ function buildEvidenceSnippet(signal: MarketSignal, quote: string, labels: strin
   const labelText = labels.length ? `Signals: ${labels.join(", ")}. ` : "";
   const metricText = sourceMetricText(signal);
   return truncate(`${labelText}Quote: "${quote}"${metricText ? ` ${metricText}` : ""}`, 900);
+}
+
+function evidenceText(signal: MarketSignal) {
+  return `${signal.title}. ${signal.fullText || signal.snippet} ${signal.sourceContext || ""}`;
+}
+
+function preserveFullText(signal: MarketSignal) {
+  const sourceText = signal.fullText || signal.snippet;
+  const limit = socialAnalysisTextLimit(signal.sourceType);
+  return truncate(sourceText, limit);
+}
+
+function socialAnalysisTextLimit(sourceType: SourceType) {
+  if (sourceType === "reddit_post" || sourceType === "reddit_comment") return 4000;
+  if (sourceType === "linkedin_post") return 3500;
+  if (sourceType.startsWith("x_")) return 2600;
+  if (sourceType === "youtube_comment") return 2400;
+  if (sourceType === "youtube_video") return 3000;
+  if (sourceType === "forum" || sourceType === "review" || sourceType === "social") return 2600;
+  return 1200;
 }
 
 function sourceMetricText(signal: MarketSignal) {

@@ -124,8 +124,9 @@ export function buildSentimentTrend(sources: Evidence[], timeWindow: TimeWindow,
 function sourceSentiment(source: Evidence) {
   const title = source.title.toLowerCase();
   const snippet = source.snippet.toLowerCase();
+  const fullText = (source.fullText || "").toLowerCase();
   const query = (source.query || "").toLowerCase();
-  const text = `${title} ${snippet}`;
+  const text = `${title} ${snippet} ${fullText}`;
   let positiveScore = countTermMatches(text, POSITIVE_SENTIMENT_TERMS);
   let negativeScore = countTermMatches(text, NEGATIVE_SENTIMENT_TERMS);
 

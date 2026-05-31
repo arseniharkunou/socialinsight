@@ -659,7 +659,7 @@ function refineGenericMarketCategory(market: MarketProfile, signals: Evidence[])
 
   const signalText = signals
     .slice(0, 40)
-    .map((signal) => `${signal.title} ${signal.snippet}`)
+    .map(evidenceMeaningText)
     .join("\n")
     .toLowerCase();
   const inferredCategory = inferMarketCategoryFromText(signalText);
@@ -814,7 +814,7 @@ function buildPainPointDeepenQueries(report: PainRadarReport, pain: PainPoint) {
   const sourceTopics = pain.evidenceIds
     .map((id) => report.sources.find((source) => source.sourceId === id))
     .filter((source): source is Evidence => Boolean(source))
-    .flatMap((source) => [compactTopic(source.title), compactTopic(source.snippet)]);
+    .flatMap((source) => [compactTopic(source.title), compactTopic(source.fullText || source.snippet)]);
   const topics = uniqueStrings([
     pain.title,
     pain.affectedPersona,
@@ -1039,6 +1039,10 @@ function validateEvidenceIds<
         ...quote,
         quote: cleanQuoteText(quote.quote),
       }))
+      .filter((quote) => {
+        const source = sourceMap.get(quote.sourceId);
+        return Boolean(source && quoteAppearsInSource(quote.quote, source));
+      })
       .filter((quote) => quote.quote && quoteQualityScore(quote.quote, context) >= 8)
       .sort((a, b) => quoteQualityScore(b.quote, context) - quoteQualityScore(a.quote, context))
       .slice(0, 3);
@@ -1082,6 +1086,27 @@ function validateEvidenceIds<
     competitors: report.competitors.map((item) => ({ ...item, evidenceIds: clean(item.evidenceIds) })),
     opportunities: report.opportunities.map((item) => ({ ...item, evidenceIds: clean(item.evidenceIds) })),
   };
+}
+
+function quoteAppearsInSource(quote: string, source: Evidence) {
+  const sourceText = normalizeQuoteMatchText(evidenceMeaningText(source));
+  const quoteText = normalizeQuoteMatchText(quote);
+  if (!quoteText) {
+    return false;
+  }
+  if (sourceText.includes(quoteText)) {
+    return true;
+  }
+  const quoteWords = quoteText.split(" ").filter((word) => word.length >= 4);
+  if (quoteWords.length === 0) {
+    return false;
+  }
+  const matchingWords = quoteWords.filter((word) => sourceText.includes(word)).length;
+  return matchingWords / quoteWords.length >= 0.72;
+}
+
+function normalizeQuoteMatchText(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
 function markReportChanges<
@@ -1252,7 +1277,7 @@ function isPreviewSourceRelevant(
     return true;
   }
 
-  const text = normalizePreviewText(`${source.title} ${source.snippet} ${source.url}`);
+  const text = normalizePreviewText(`${evidenceMeaningText(source)} ${source.url}`);
   if (relevance.websiteHost && text.includes(relevance.websiteHost)) {
     return true;
   }
@@ -1304,8 +1329,16 @@ function bestQuoteFromEvidence(source: Evidence, context = "") {
     .replace(/\bQuery:\s*[^.]+(?:\.\s*)?/gi, "")
     .replace(/\s+/g, " ")
     .trim();
+  const fullText = source.fullText
+    ? `${source.title}. ${source.fullText}`.replace(/\s+/g, " ").trim()
+    : "";
   const candidates = [
     explicitQuote,
+    ...(fullText
+      ? fullText
+          .split(/(?<=[.!?])\s+|[;•]\s+/)
+          .map((part) => part.trim())
+      : []),
     ...text
       .split(/(?<=[.!?])\s+|[;•]\s+/)
       .map((part) => part.trim()),
@@ -1317,6 +1350,10 @@ function bestQuoteFromEvidence(source: Evidence, context = "") {
     .map((quote) => ({ quote, score: quoteQualityScore(quote, context) }))
     .filter((item) => item.score >= 0)
     .sort((a, b) => b.score - a.score)[0]?.quote || "";
+}
+
+function evidenceMeaningText(source: Pick<Evidence, "title" | "snippet" | "fullText" | "sourceContext">) {
+  return `${source.title}. ${source.fullText || source.snippet} ${source.sourceContext || ""}`;
 }
 
 function throwIfAborted(signal?: AbortSignal) {

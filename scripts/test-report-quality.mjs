@@ -43,7 +43,7 @@ function assertGroundedReport(report) {
     for (const proof of pain.quoteProofs) {
       const source = sourceMap.get(proof.sourceId);
       assert.ok(source, `quote proof for "${pain.title}" cites unknown source`);
-      const sourceText = `${source.title} ${source.snippet}`.toLowerCase();
+      const sourceText = `${source.title} ${source.snippet} ${source.fullText || ""}`.toLowerCase();
       const proofWords = proof.quote.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length >= 4);
       assert.ok(
         proofWords.some((word) => sourceText.includes(word)),
@@ -89,6 +89,15 @@ function assertSourceGuardrails() {
 
   const openai = read("lib/openai.ts");
   assert.ok(openai.includes("Return every materially distinct recurring pain point"), "OpenAI prompt must avoid fixed pain point caps");
+  assert.ok(openai.includes("prepareSynthesisSignals"), "OpenAI synthesis must use prepared full-text social evidence");
+  assert.ok(openai.includes("fullText/sourceContext"), "OpenAI prompt must instruct the model to analyze full source context");
+
+  const evidence = read("lib/evidence.ts");
+  assert.ok(evidence.includes("preserveFullText"), "Evidence extraction must preserve fuller social text for synthesis");
+  assert.ok(evidence.includes("displayQuote"), "Evidence extraction must separate display quotes from analysis text");
+
+  const brightdata = read("lib/brightdata.ts");
+  assert.ok(brightdata.includes("fullText"), "Bright Data parsers must keep fullText on social records");
 }
 
 const validReport = {
@@ -98,6 +107,7 @@ const validReport = {
       sourceType: "reddit_post",
       title: "HeartFlow reimbursement friction discussion",
       snippet: "Clinicians said reimbursement is hard and adoption stalls when economics are unclear.",
+      fullText: "Full Reddit thread context: Clinicians said reimbursement is hard and adoption stalls when economics are unclear.",
       url: "https://reddit.com/r/cardiology/comments/1",
     },
     {
@@ -105,6 +115,7 @@ const validReport = {
       sourceType: "linkedin_post",
       title: "Operators discuss workflow integration burden",
       snippet: "Teams praised CT analysis but said workflow integration takes coordination across radiology and cardiology.",
+      fullText: "Full LinkedIn post context: Teams praised CT analysis but said workflow integration takes coordination across radiology and cardiology.",
       url: "https://linkedin.com/posts/example",
     },
   ],

@@ -250,6 +250,36 @@ function extractOutputText(output: unknown) {
   return "";
 }
 
+function prepareSynthesisSignals(signals: MarketSignal[], searchDepth: SearchDepth, limit: number) {
+  return signals.slice(0, limit).map((signal) => {
+    const fullText = signal.fullText || signal.snippet;
+    return {
+      sourceId: signal.sourceId,
+      title: signal.title,
+      url: signal.url,
+      sourceType: signal.sourceType,
+      query: signal.query,
+      publishedAt: signal.publishedAt,
+      confidence: signal.confidence,
+      snippet: signal.snippet,
+      displayQuote: signal.displayQuote,
+      sourceContext: signal.sourceContext,
+      fullText: truncate(fullText, synthesisTextLimit(signal, searchDepth)),
+    };
+  });
+}
+
+function synthesisTextLimit(signal: MarketSignal, searchDepth: SearchDepth) {
+  const deep = searchDepth === "deep";
+  if (signal.sourceType === "reddit_post" || signal.sourceType === "reddit_comment") return deep ? 4000 : 2600;
+  if (signal.sourceType === "linkedin_post") return deep ? 3500 : 2400;
+  if (signal.sourceType.startsWith("x_")) return deep ? 2600 : 1800;
+  if (signal.sourceType === "youtube_video") return deep ? 3000 : 2000;
+  if (signal.sourceType === "youtube_comment") return deep ? 2400 : 1800;
+  if (signal.sourceType === "forum" || signal.sourceType === "review" || signal.sourceType === "social") return deep ? 2600 : 1800;
+  return deep ? 1200 : 800;
+}
+
 export async function synthesizeReport(input: {
   url: string;
   market: MarketProfile;
@@ -264,6 +294,7 @@ export async function synthesizeReport(input: {
   }
 
   const signalLimit = input.searchDepth === "deep" ? 700 : 240;
+  const publicSignals = prepareSynthesisSignals(input.signals, input.searchDepth || "fast", signalLimit);
   const report = await structuredResponse<ReportSynthesis>(
     "painfinder_report",
     reportSchema,
@@ -285,7 +316,8 @@ Rules:
 - Confidence: 80-100 requires direct quotes, multiple independent sources, recent evidence, and consistent wording; 60-79 means solid but incomplete evidence; 40-59 means plausible but snippet-limited; below 40 means mostly inference.
 - Every pain point, request, workaround, competitor, and opportunity must cite one or more evidenceIds from the provided sources.
 - whatsWorking should contain 3-5 short positive themes only when similar praise, outcomes, recommendations, or value signals repeat across at least 2 evidenceIds. Omit one-off praise. If there is not enough overlapping positive evidence, return an empty array.
-- Every pain point must include 1-3 quoteProofs: short direct phrases or sentences extracted from the source title/snippet text, paired with the sourceId. Use only words present in the provided source signal; do not invent quotes.
+- Analyze the source fullText/sourceContext to understand meaning, stance, and surrounding context. The snippet/displayQuote is only a citation aid, not the full analysis substrate.
+- Every pain point must include 1-3 quoteProofs: short direct phrases or sentences extracted from the source title, snippet, displayQuote, or fullText, paired with the sourceId. Use only words present in the provided source signal; do not invent quotes.
 - If evidence is weak or demo-like, say so in whatNotToTrustYet.
 - Do not invent source IDs.
 - If analysis mode is "category", search the evidence for competing products and vendors in the category. In competitors, include identified competitors with sentiment derived from the cited source evidence: positive means users praise or prefer it, negative means users complain or switch away, mixed means both positive and negative signals appear, neutral means it is only mentioned or compared without clear sentiment.
@@ -303,7 +335,7 @@ Evidence clusters:
 ${JSON.stringify(input.evidenceClusters || [], null, 2)}
 
 Public signals:
-${JSON.stringify(input.signals.slice(0, signalLimit), null, 2)}
+${JSON.stringify(publicSignals, null, 2)}
 
 Produce concise but decision-ready JSON.`,
   );
@@ -323,6 +355,7 @@ export async function synthesizeDeepenedReport(input: {
   }
 
   const signalLimit = 900;
+  const combinedSignals = prepareSynthesisSignals(input.signals, "deep", signalLimit);
   const report = await structuredResponse<ReportSynthesis>(
     "social_insight_deepened_report",
     reportSchema,
@@ -338,7 +371,8 @@ Rules:
 - Add every materially distinct new pain point, opportunity, request, workaround, competitor mention, or positive theme that is supported by evidence.
 - Do not cap pain points at 5. Return all supported recurring pains and rank them by severity, frequency, and confidence.
 - Every pain point, request, workaround, competitor, and opportunity must cite one or more evidenceIds from the provided sources.
-- Every pain point must include 1-3 quoteProofs using only words present in the cited source title/snippet text.
+- Analyze source fullText/sourceContext before deciding meaning; use displayQuote/snippet only as citation support.
+- Every pain point must include 1-3 quoteProofs using only words present in the cited source title, snippet, displayQuote, or fullText.
 - Be specific. Avoid generic claims like "proof of value is hard to evaluate" unless the cited public evidence directly says that in target-specific terms.
 - If the deeper pass does not materially change a section, keep it concise and do not invent filler.
 
@@ -355,7 +389,7 @@ Evidence clusters:
 ${JSON.stringify(input.evidenceClusters || [], null, 2)}
 
 Combined public signals:
-${JSON.stringify(input.signals.slice(0, signalLimit), null, 2)}
+${JSON.stringify(combinedSignals, null, 2)}
 
 Produce concise but decision-ready JSON.`,
   );
@@ -376,6 +410,7 @@ export async function synthesizeDeepenedPainPoint(input: {
     throw new Error("OpenAI API key is required to synthesize a deepened pain point.");
   }
 
+  const combinedSignals = prepareSynthesisSignals(input.signals, "deep", 520);
   const response = await structuredResponse<FocusedPainPointSynthesis>(
     "social_insight_deepened_pain_point",
     focusedPainPointSchema,
@@ -392,7 +427,8 @@ Rules:
 - Set changed=false when the new evidence is duplicative, weak, generic, company-authored, or does not materially deepen this specific pain. In that case return the original pain point content and put a concise dismissible explanation in note.
 - If changed=true, preserve the pain point's core topic, add stronger quoteProofs and evidenceIds, and update scores only when evidence warrants it.
 - Every evidenceId and quoteProof sourceId must come from the provided signals.
-- quoteProofs must use only words present in the cited source title or snippet. Do not invent quotes.
+- Analyze source fullText/sourceContext to understand the exact issue before updating. The quote/display snippet is support, not the whole source.
+- quoteProofs must use only words present in the cited source title, snippet, displayQuote, or fullText. Do not invent quotes.
 - Keep the title specific to the target/category. Avoid generic titles like "proof of value is hard to evaluate" unless the source language directly supports that phrasing.
 
 Pain point index: ${input.painIndex}
@@ -412,7 +448,7 @@ Evidence clusters:
 ${JSON.stringify(input.evidenceClusters || [], null, 2)}
 
 Combined public signals:
-${JSON.stringify(input.signals.slice(0, 520), null, 2)}
+${JSON.stringify(combinedSignals, null, 2)}
 
 Produce concise JSON.`,
   );
@@ -703,7 +739,7 @@ function quoteProofsFromSignals(signals: MarketSignal[], ids: string[]) {
       }
       return {
         sourceId: id,
-        quote: bestQuoteFromText(`${source.title}. ${source.snippet}`),
+        quote: bestQuoteFromText(`${source.title}. ${source.fullText || source.snippet}`),
       };
     })
     .filter(Boolean)

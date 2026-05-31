@@ -1022,11 +1022,14 @@ function parseRedditPosts(payload: unknown, limit = 12): MarketSignal[] {
     const upvotes = Number(item.num_upvotes || 0);
     const publishedAt = dateField(item, ["date_posted", "created_at", "published_at", "date"]);
     const metrics = compactText([community ? `r/${community}` : "", comments ? `${comments.toLocaleString()} comments` : "", upvotes ? `${upvotes.toLocaleString()} upvotes` : ""]);
+    const fullText = truncate(compactText([`Post title: ${title}`, description, metrics]), 4000);
     return [{
       sourceId: createSourceId("reddit-post", index, url),
       title,
       url,
       snippet: truncate(compactText([description, metrics]), 900),
+      fullText,
+      sourceContext: compactText([community ? `Reddit community: r/${community}` : "", metrics]),
       sourceType: "reddit_post",
       query: "Bright Data Reddit Posts API",
       publishedAt,
@@ -1046,15 +1049,19 @@ function parseRedditComments(payload: unknown, limit = 30): MarketSignal[] {
       const url = String(item.url || item.post_url || "");
       const comment = String(item.comment || "");
       const community = String(item.community_name || "");
+      const postTitle = String(item.post_title || item.title || item.thread_title || "");
       const upvotes = Number(item.num_upvotes || 0);
       const replies = Number(item.num_replies || 0);
       const publishedAt = dateField(item, ["date_posted", "created_at", "published_at", "date"]);
       const metrics = compactText([community ? `r/${community}` : "", upvotes ? `${upvotes.toLocaleString()} upvotes` : "", replies ? `${replies.toLocaleString()} replies` : ""]);
+      const fullText = truncate(compactText([postTitle ? `Parent post: ${postTitle}` : "", `Comment: ${comment}`, metrics]), 4000);
       return {
         sourceId: createSourceId("reddit-comment", index, `${url}-${comment}`),
         title: `Reddit comment${community ? ` in r/${community}` : ""}`,
         url,
         snippet: truncate(compactText([comment, metrics]), 900),
+        fullText,
+        sourceContext: compactText([community ? `Reddit community: r/${community}` : "", postTitle ? `Parent post: ${postTitle}` : "", metrics]),
         sourceType: "reddit_comment",
         query: "Bright Data Reddit Comments API",
         publishedAt,
@@ -1076,6 +1083,7 @@ function parseXPosts(payload: unknown, query = "Bright Data X Posts API", limit 
       const url = String(item.url || (user && id ? `https://x.com/${user}/status/${id}` : ""));
       const description = String(item.description || item.text || item.post_text || item.content || "");
       const isReply = isLikelyXReply(item);
+      const parentText = xParentText(item);
       const sourceType: MarketSignal["sourceType"] = isReply ? "x_comment" : "x_post";
       const replies = Number(item.replies || item.reply_count || 0);
       const reposts = Number(item.reposts || item.retweets || item.retweet_count || 0);
@@ -1089,11 +1097,14 @@ function parseXPosts(payload: unknown, query = "Bright Data X Posts API", limit 
         likes ? `${likes.toLocaleString()} likes` : "",
         views ? `${views.toLocaleString()} views` : "",
       ]);
+      const fullText = truncate(compactText([parentText ? `Parent post: ${parentText}` : "", `${isReply ? "Reply" : "Post"}: ${description}`, metrics]), 2600);
       return {
         sourceId: createSourceId(sourceType, index, `${url}-${description}`),
         title: `${isReply ? "X reply" : "X post"}${user ? ` by @${user}` : ""}`,
         url,
         snippet: truncate(compactText([description, metrics]), 900),
+        fullText,
+        sourceContext: compactText([user ? `X author: @${user}` : "", parentText ? `Parent post: ${truncate(parentText, 360)}` : "", metrics]),
         sourceType,
         query,
         publishedAt,
@@ -1123,6 +1134,15 @@ function isLikelyXReply(item: Record<string, unknown>) {
   );
 }
 
+function xParentText(item: Record<string, unknown>) {
+  const parent = item.parent_post_details;
+  if (!parent || typeof parent !== "object") {
+    return "";
+  }
+  const record = parent as Record<string, unknown>;
+  return String(record.description || record.text || record.post_text || record.content || "");
+}
+
 function parseLinkedInPosts(payload: unknown, query = "Bright Data LinkedIn Posts API", limit = 18): MarketSignal[] {
   return asRecordArray(payload)
     .filter((item) => String(item.post_text || item.description || item.text || item.content || item.title || "").trim().length > 20)
@@ -1145,11 +1165,14 @@ function parseLinkedInPosts(payload: unknown, query = "Bright Data LinkedIn Post
         comments ? `${comments.toLocaleString()} comments` : "",
         followers ? `${followers.toLocaleString()} followers` : "",
       ]);
+      const fullText = truncate(compactText([`Post title: ${title}`, text, metrics]), 3500);
       return {
         sourceId: createSourceId("linkedin-post", index, `${url}-${text}`),
         title: `${title}${author ? ` by ${author}` : ""}`,
         url,
         snippet: truncate(compactText([text, metrics]), 900),
+        fullText,
+        sourceContext: compactText([author ? `LinkedIn author: ${author}` : "", metrics]),
         sourceType: "linkedin_post" as const,
         query,
         publishedAt,
@@ -1183,11 +1206,14 @@ function parseYouTubeVideos(payload: unknown, query = "Bright Data YouTube Video
         likes ? `${likes.toLocaleString()} likes` : "",
         comments ? `${comments.toLocaleString()} comments` : "",
       ]);
+      const fullText = truncate(compactText([`Video title: ${title}`, description, metrics]), 3000);
       return {
         sourceId: createSourceId("youtube-video", index, `${url}-${title}`),
         title: `YouTube video: ${title}`,
         url,
         snippet: truncate(compactText([description || title, metrics]), 900),
+        fullText,
+        sourceContext: compactText([channel ? `YouTube channel: ${channel}` : "", metrics]),
         sourceType: "youtube_video" as const,
         query,
         publishedAt,
@@ -1209,6 +1235,7 @@ function parseYouTubeComments(payload: unknown, query = "Bright Data YouTube Com
       const url = canonicalYouTubeVideoUrl(rawUrl) || rawUrl;
       const comment = String(item.comment_text || item.comment || item.text || item.content || "");
       const username = String(item.username || item.author || item.user_name || "");
+      const videoTitle = String(item.video_title || item.title || "");
       const likes = Number(item.likes || item.like_count || 0);
       const replies = Number(item.replies || item.reply_count || 0);
       const publishedAt = dateField(item, ["date", "date_posted", "created_at", "published_at"]);
@@ -1217,11 +1244,14 @@ function parseYouTubeComments(payload: unknown, query = "Bright Data YouTube Com
         likes ? `${likes.toLocaleString()} likes` : "",
         replies ? `${replies.toLocaleString()} replies` : "",
       ]);
+      const fullText = truncate(compactText([videoTitle ? `Video: ${videoTitle}` : "", `Comment: ${comment}`, metrics]), 2400);
       return {
         sourceId: createSourceId("youtube-comment", index, `${url}-${item.comment_id || comment}`),
         title: `YouTube comment${username ? ` by ${username}` : ""}`,
         url,
         snippet: truncate(compactText([comment, metrics]), 900),
+        fullText,
+        sourceContext: compactText([username ? `YouTube commenter: ${username}` : "", videoTitle ? `Video: ${videoTitle}` : "", metrics]),
         sourceType: "youtube_comment" as const,
         query,
         publishedAt,

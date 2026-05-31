@@ -45,6 +45,9 @@ export type Evidence = {
   title: string;
   url: string;
   snippet: string;
+  fullText?: string;
+  sourceContext?: string;
+  displayQuote?: string;
   sourceType: SourceType;
   query?: string;
   publishedAt?: string;

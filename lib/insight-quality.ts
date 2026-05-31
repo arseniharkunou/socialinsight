@@ -189,7 +189,7 @@ export function filterAndRankSignalsForRelevance(signals: MarketSignal[], contex
 export function buildEvidenceClusters(sources: Evidence[]): EvidenceCluster[] {
   const clusters = CLUSTER_THEMES.map((theme) => {
     const matching = sources.filter((source) => {
-      const text = normalizedText(`${source.title} ${source.snippet}`);
+      const text = normalizedText(evidenceMeaningText(source));
       return theme.terms.some((term) => text.includes(term));
     });
     return clusterFromEvidence(theme.id, theme.theme, matching);
@@ -261,7 +261,7 @@ export function auditReportAgainstEvidence<T extends Pick<PainRadarReport, "topP
 }
 
 function scoreSignalRelevance(signal: MarketSignal, context: EntityRelevanceContext, index: number) {
-  const text = normalizedText(`${signal.title} ${signal.snippet} ${signal.url}`);
+  const text = normalizedText(`${evidenceMeaningText(signal)} ${signal.url}`);
   const urlHost = safeHostname(signal.url);
   const excludedHits = context.excludedTerms.filter((term) => text.includes(term)).length;
   const productHit = Boolean(context.domainToken && text.includes(context.domainToken)) || normalizedText(context.productName).split(" ").some((term) => term.length > 3 && text.includes(term));
@@ -328,7 +328,11 @@ function clusterFromEvidence(id: string, theme: string, evidence: Evidence[]): E
 function quoteFromEvidence(source: Evidence) {
   const match = source.snippet.match(/Quote:\s*"([^"]+)"/i);
   if (match?.[1]) return match[1];
-  return `${source.title}. ${source.snippet}`.replace(/\s+/g, " ").slice(0, 220);
+  return evidenceMeaningText(source).replace(/\s+/g, " ").slice(0, 220);
+}
+
+function evidenceMeaningText(source: Pick<Evidence, "title" | "snippet" | "fullText" | "sourceContext">) {
+  return `${source.title}. ${source.fullText || source.snippet} ${source.sourceContext || ""}`;
 }
 
 function isCustomerVoiceEvidence(source: Pick<Evidence, "sourceType" | "url">) {
