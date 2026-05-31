@@ -61,11 +61,13 @@ BRIGHTDATA_WEB_UNLOCKER_ZONE=web_unlocker1
 BRIGHTDATA_COUNTRY=us
 BRIGHTDATA_MCP_URL=https://mcp.brightdata.com/sse?token=<token>&groups=advanced_scraping,social
 
-SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_URL=https://dathibrsfkfanuvatquv.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=<server-only-service-role-key>
 ```
 
 Only server-side variables are used. Do not expose these as `NEXT_PUBLIC_*`.
+
+Supabase access is intentionally hard-scoped to `https://dathibrsfkfanuvatquv.supabase.co`. The app refuses to use any other `SUPABASE_URL` so agents and deployments cannot accidentally write analysis jobs to another project.
 
 Before using the Supabase-backed Vercel flow, run `supabase/social_insight_analysis_jobs.sql` in the Supabase SQL Editor for the configured project. The service role key is required because the server writes private job state while Row Level Security stays enabled.
 

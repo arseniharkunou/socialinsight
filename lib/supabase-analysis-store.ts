@@ -1,5 +1,8 @@
 import type { AnalyzeJobSnapshot, LiveQuotePreview } from "@/lib/types";
 
+export const ALLOWED_SUPABASE_PROJECT_REF = "dathibrsfkfanuvatquv";
+export const ALLOWED_SUPABASE_URL = `https://${ALLOWED_SUPABASE_PROJECT_REF}.supabase.co`;
+
 type AnalysisJobRow = {
   id: string;
   status: AnalyzeJobSnapshot["status"];
@@ -18,6 +21,7 @@ type AnalysisJobRow = {
 };
 
 export function hasSupabaseAnalysisStore() {
+  assertAllowedSupabaseUrl();
   return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
 }
 
@@ -66,7 +70,7 @@ export async function appendSupabaseAnalysisEvent(
 }
 
 async function supabaseRequest<T = unknown>(path: string, init: RequestInit) {
-  const url = process.env.SUPABASE_URL?.replace(/\/+$/, "");
+  const url = allowedSupabaseUrl();
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !serviceRoleKey) {
     throw new Error("Supabase analysis store is not configured.");
@@ -92,6 +96,29 @@ async function supabaseRequest<T = unknown>(path: string, init: RequestInit) {
     return undefined as T;
   }
   return response.json() as Promise<T>;
+}
+
+function allowedSupabaseUrl() {
+  assertAllowedSupabaseUrl();
+  return process.env.SUPABASE_URL?.replace(/\/+$/, "");
+}
+
+function assertAllowedSupabaseUrl() {
+  const configured = process.env.SUPABASE_URL;
+  if (!configured) {
+    return;
+  }
+
+  let origin: string;
+  try {
+    origin = new URL(configured).origin;
+  } catch {
+    throw new Error(`Invalid SUPABASE_URL. This project must use ${ALLOWED_SUPABASE_URL}.`);
+  }
+
+  if (origin !== ALLOWED_SUPABASE_URL) {
+    throw new Error(`Refusing to use Supabase project ${origin}. This project is hard-wired to ${ALLOWED_SUPABASE_URL}.`);
+  }
 }
 
 function toRow(job: AnalyzeJobSnapshot): AnalysisJobRow {
