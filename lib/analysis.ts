@@ -282,9 +282,10 @@ async function runAnalysis(
   setStage("brightdata");
   let rawSignals: MarketSignal[];
   let usedLivePublicSignals = false;
+  const runNonce = crypto.randomUUID();
   const previewSignals = (signals: MarketSignal[]) => previewQuotesFromEvidence(filterAndRankSignalsForRelevance(signals, relevanceContext, { allowFallback: false }), market, target);
   try {
-    rawSignals = await searchPublicSignals(market.searchQueries, timeWindow, sources, searchDepth, (signals) => setPreviewQuotes?.(previewSignals(signals)));
+    rawSignals = await searchPublicSignals(market.searchQueries, timeWindow, sources, searchDepth, (signals) => setPreviewQuotes?.(previewSignals(signals)), runNonce);
     usedLivePublicSignals = hasBrightDataCredentials() || hasBrightDataMcpCredentials();
     setPreviewQuotes?.(previewSignals(rawSignals));
     if ((!IS_VERCEL || HAS_DURABLE_ANALYSIS_JOBS) && shouldRunSocialExpansionPass(searchDepth, rawSignals)) {
@@ -294,6 +295,7 @@ async function runAnalysis(
         sources,
         searchDepth,
         (signals) => setPreviewQuotes?.(previewSignals(signals)),
+        runNonce,
       );
       rawSignals = mergeSignals(rawSignals, secondPassSignals);
       stageNotes.marketDiscovery = `${stageNotes.marketDiscovery}; ${searchDepthLabel(searchDepth)} ran an additional social-commentary sweep because first-pass public conversation coverage was thin`;

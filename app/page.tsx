@@ -94,6 +94,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url, analysisMode, timeWindow, searchDepth, sources: selectedSources }),
+        cache: "no-store",
         signal: controller.signal,
       });
 
@@ -229,7 +230,7 @@ async function pollAnalysisJob(
   onUpdate: (payload: AnalyzeJobResponse) => boolean | Promise<boolean>,
 ) {
   while (!signal.aborted) {
-    const response = await fetch(`/api/analyze/${encodeURIComponent(jobId)}`, { signal });
+    const response = await fetch(`/api/analyze/${encodeURIComponent(jobId)}`, { cache: "no-store", signal });
     const done = await onUpdate(await readJobResponse(response));
     if (done) {
       return;

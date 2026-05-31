@@ -75,46 +75,46 @@ type SearchBudget = {
 
 const SEARCH_BUDGETS: Record<SearchDepth, SearchBudget> = {
   fast: {
-    finalSignals: 160,
-    earlyPreviewSignals: 24,
-    restQueries: { base: 2, reddit: 12, x: 12, linkedin: 12, youtube: 5 },
-    mcpQueries: { base: 1, reddit: 4, x: 4, linkedin: 4, youtube: 2 },
+    finalSignals: 320,
+    earlyPreviewSignals: 36,
+    restQueries: { base: 4, reddit: 24, x: 24, linkedin: 24, youtube: 10 },
+    mcpQueries: { base: 2, reddit: 8, x: 8, linkedin: 8, youtube: 4 },
     serpResultsPerQuery: 14,
     mcpScrapeUrls: 3,
-    redditUrls: 16,
-    redditCommentUrls: 10,
-    redditKeywordQueries: 8,
+    redditUrls: 32,
+    redditCommentUrls: 20,
+    redditKeywordQueries: 16,
     redditPostsPerQuery: 20,
     redditPostParseLimit: 80,
     redditCommentParseLimit: 160,
-    xUrls: 30,
+    xUrls: 60,
     xParseLimit: 120,
-    linkedinUrls: 30,
+    linkedinUrls: 60,
     linkedinParseLimit: 110,
-    youtubeUrls: 10,
-    youtubeCommentUrls: 5,
+    youtubeUrls: 20,
+    youtubeCommentUrls: 10,
     youtubeVideoParseLimit: 30,
     youtubeCommentParseLimit: 80,
   },
   deep: {
-    finalSignals: 520,
-    earlyPreviewSignals: 48,
-    restQueries: { base: 4, reddit: 34, x: 34, linkedin: 34, youtube: 10 },
-    mcpQueries: { base: 2, reddit: 10, x: 10, linkedin: 10, youtube: 4 },
+    finalSignals: 1200,
+    earlyPreviewSignals: 72,
+    restQueries: { base: 12, reddit: 102, x: 102, linkedin: 102, youtube: 30 },
+    mcpQueries: { base: 6, reddit: 30, x: 30, linkedin: 30, youtube: 12 },
     serpResultsPerQuery: 20,
     mcpScrapeUrls: 8,
-    redditUrls: 50,
-    redditCommentUrls: 35,
-    redditKeywordQueries: 32,
+    redditUrls: 150,
+    redditCommentUrls: 105,
+    redditKeywordQueries: 96,
     redditPostsPerQuery: 40,
     redditPostParseLimit: 240,
     redditCommentParseLimit: 420,
-    xUrls: 80,
+    xUrls: 240,
     xParseLimit: 300,
-    linkedinUrls: 80,
+    linkedinUrls: 240,
     linkedinParseLimit: 260,
-    youtubeUrls: 24,
-    youtubeCommentUrls: 12,
+    youtubeUrls: 72,
+    youtubeCommentUrls: 36,
     youtubeVideoParseLimit: 80,
     youtubeCommentParseLimit: 180,
   },
@@ -148,6 +148,8 @@ async function brightDataRequest(body: Record<string, unknown>) {
     headers: {
       Authorization: `Bearer ${cfg.apiKey}`,
       "Content-Type": "application/json",
+      "Cache-Control": "no-cache, no-store, max-age=0",
+      Pragma: "no-cache",
     },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(IS_VERCEL ? 10000 : 25000),
@@ -194,6 +196,8 @@ async function brightDataScraperRequest(datasetId: string, input: Array<Record<s
     headers: {
       Authorization: `Bearer ${cfg.apiKey}`,
       "Content-Type": "application/json",
+      "Cache-Control": "no-cache, no-store, max-age=0",
+      Pragma: "no-cache",
     },
     body: JSON.stringify({ input }),
     signal: AbortSignal.timeout(providerTimeout(options.requestTimeoutMs ?? 65000, 10000)),
@@ -227,7 +231,7 @@ async function waitForSnapshot(snapshotId: string, apiKey: string, timeoutMs: nu
   while (Date.now() - started < timeoutMs) {
     await sleep(IS_VERCEL ? 1500 : 3000);
     const response = await fetch(`${SCRAPER_PROGRESS_ENDPOINT}/${snapshotId}`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
+      headers: { Authorization: `Bearer ${apiKey}`, "Cache-Control": "no-cache, no-store, max-age=0", Pragma: "no-cache" },
       signal: AbortSignal.timeout(8000),
     });
     if (!response.ok) {
@@ -247,7 +251,7 @@ function providerTimeout(requestedMs: number, vercelMaxMs: number) {
 
 async function downloadSnapshot(snapshotId: string, apiKey: string) {
   const response = await fetch(`${SCRAPER_SNAPSHOT_ENDPOINT}/${snapshotId}?format=json`, {
-    headers: { Authorization: `Bearer ${apiKey}` },
+    headers: { Authorization: `Bearer ${apiKey}`, "Cache-Control": "no-cache, no-store, max-age=0", Pragma: "no-cache" },
     signal: AbortSignal.timeout(12000),
   });
 
@@ -365,6 +369,7 @@ export async function searchPublicSignals(
   sources?: SupportedSource[],
   searchDepth: SearchDepth = "fast",
   onSignals?: (signals: MarketSignal[]) => void,
+  runNonce = crypto.randomUUID(),
 ) {
   const budget = runtimeSearchBudget(searchDepth);
   if (!hasBrightDataCredentials() && !hasBrightDataMcpCredentials()) {
@@ -375,8 +380,8 @@ export async function searchPublicSignals(
 
   const windowConfig = timeWindowConfig(timeWindow);
   const sourceSelection = normalizeSourceSelection(sources);
-  const restSignals = hasBrightDataCredentials() ? await searchWithBrightDataRest(queries, windowConfig, sourceSelection, budget) : [];
-  const mcpSignals = hasBrightDataMcpCredentials() ? await searchWithBrightDataMcp(queries, windowConfig, sourceSelection, budget).catch(() => []) : [];
+  const restSignals = hasBrightDataCredentials() ? await searchWithBrightDataRest(queries, windowConfig, sourceSelection, budget, runNonce) : [];
+  const mcpSignals = hasBrightDataMcpCredentials() ? await searchWithBrightDataMcp(queries, windowConfig, sourceSelection, budget, runNonce).catch(() => []) : [];
 
   const serpSignals = dedupeSignals(
     [...mcpSignals, ...restSignals]
@@ -455,15 +460,20 @@ function runtimeSearchBudget(searchDepth: SearchDepth): SearchBudget {
   };
 }
 
-async function searchWithBrightDataRest(queries: string[], windowConfig: TimeWindowConfig, sources: SourceSelection, budget: SearchBudget) {
+async function searchWithBrightDataRest(queries: string[], windowConfig: TimeWindowConfig, sources: SourceSelection, budget: SearchBudget, runNonce: string) {
   const cfg = config();
   const searchQueries = buildDiscoveryQueries(queries, sources, budget.restQueries)
     .map((query) => withGoogleTimeFilter(query, windowConfig));
   const batches = await Promise.allSettled(
-    searchQueries.map(async (query) => {
+    searchQueries.map(async (query, index) => {
+      const searchUrl = new URL("https://www.google.com/search");
+      searchUrl.searchParams.set("q", query);
+      searchUrl.searchParams.set("brd_json", "1");
+      searchUrl.searchParams.set("si_run", runNonce);
+      searchUrl.searchParams.set("si_query", String(index));
       const payload = await brightDataRequest({
         zone: cfg.serpZone,
-        url: `https://www.google.com/search?q=${encodeURIComponent(query)}&brd_json=1`,
+        url: searchUrl.toString(),
         format: "json",
         method: "GET",
         country: cfg.country,
@@ -475,7 +485,7 @@ async function searchWithBrightDataRest(queries: string[], windowConfig: TimeWin
   return batches.flatMap((batch) => (batch.status === "fulfilled" ? batch.value : []));
 }
 
-async function searchWithBrightDataMcp(queries: string[], windowConfig: TimeWindowConfig, sources: SourceSelection, budget: SearchBudget) {
+async function searchWithBrightDataMcp(queries: string[], windowConfig: TimeWindowConfig, sources: SourceSelection, budget: SearchBudget, _runNonce: string) {
   const mcpUrl = process.env.BRIGHTDATA_MCP_URL;
   if (!mcpUrl) {
     return [];

@@ -27,9 +27,9 @@ export async function POST(request: Request) {
       ? body.sources.filter((source): source is SupportedSource => sourceValues.has(source))
       : DEFAULT_SUPPORTED_SOURCES;
     if (!body.url) {
-      return NextResponse.json<AnalyzeJobResponse>(
+      return noStoreJson<AnalyzeJobResponse>(
         { ok: false, error: analysisMode === "category" ? "Enter a product, company, category, or domain." : "Enter a product, company, or domain." },
-        { status: 400 },
+        400,
       );
     }
 
@@ -45,7 +45,7 @@ export async function POST(request: Request) {
       after(async () => {
         await runAnalysisJob(job.id, input);
       });
-      return NextResponse.json<AnalyzeJobResponse>({ ok: true, job }, { status: 202 });
+      return noStoreJson<AnalyzeJobResponse>({ ok: true, job }, 202);
     }
 
     const job = process.env.VERCEL
@@ -54,11 +54,21 @@ export async function POST(request: Request) {
     if (!job) {
       throw new Error("Analysis job could not be created.");
     }
-    return NextResponse.json<AnalyzeJobResponse>({ ok: true, job }, { status: process.env.VERCEL ? 200 : 202 });
+    return noStoreJson<AnalyzeJobResponse>({ ok: true, job }, process.env.VERCEL ? 200 : 202);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected analysis error";
-    return NextResponse.json<AnalyzeJobResponse>({ ok: false, error: message }, { status: 500 });
+    return noStoreJson<AnalyzeJobResponse>({ ok: false, error: message }, 500);
   }
+}
+
+function noStoreJson<T>(payload: T, status: number) {
+  return NextResponse.json<T>(payload, {
+    status,
+    headers: {
+      "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate",
+      Pragma: "no-cache",
+    },
+  });
 }
 
 function analysisDeadlineMs() {
