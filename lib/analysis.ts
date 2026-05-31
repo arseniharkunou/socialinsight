@@ -280,9 +280,11 @@ async function runAnalysis(
   throwIfAborted(signal);
   setStage("brightdata");
   let rawSignals: MarketSignal[];
+  let usedLivePublicSignals = false;
   const previewSignals = (signals: MarketSignal[]) => previewQuotesFromEvidence(filterAndRankSignalsForRelevance(signals, relevanceContext, { allowFallback: false }), market, target);
   try {
     rawSignals = await searchPublicSignals(market.searchQueries, timeWindow, sources, searchDepth, (signals) => setPreviewQuotes?.(previewSignals(signals)));
+    usedLivePublicSignals = hasBrightDataCredentials() || hasBrightDataMcpCredentials();
     setPreviewQuotes?.(previewSignals(rawSignals));
     if (searchDepth === "deep" && (!IS_VERCEL || HAS_DURABLE_ANALYSIS_JOBS) && shouldRunSecondPass(rawSignals)) {
       const secondPassSignals = await searchPublicSignals(
@@ -320,7 +322,7 @@ async function runAnalysis(
 
   throwIfAborted(signal);
   setStage("synthesis");
-  let mode: "live" | "demo" = hasOpenAiCredentials() && (hasBrightDataCredentials() || hasBrightDataMcpCredentials()) && providerNotes.length === 0 ? "live" : "demo";
+  let mode: "live" | "demo" = hasOpenAiCredentials() && usedLivePublicSignals ? "live" : "demo";
   let synthesized;
   try {
     synthesized = await synthesizeReport({ url: target.modelTarget, market, signals, evidenceClusters, mode, analysisMode: target.analysisMode, searchDepth });
