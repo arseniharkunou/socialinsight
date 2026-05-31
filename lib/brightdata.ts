@@ -23,6 +23,7 @@ const LINKEDIN_POSTS_DATASET_ID = "gd_lyy3tktm25m4avu764";
 const YOUTUBE_VIDEOS_DATASET_ID = "gd_lk56epmy2i5g7lzu0k";
 const YOUTUBE_COMMENTS_DATASET_ID = "gd_lk9q0ew71spt1mxywf";
 const MAX_WEBSITE_BYTES = 900_000;
+const IS_VERCEL = Boolean(process.env.VERCEL);
 
 type TimeWindowConfig = {
   timeWindow: TimeWindow;
@@ -148,7 +149,7 @@ async function brightDataRequest(body: Record<string, unknown>) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(25000),
+    signal: AbortSignal.timeout(IS_VERCEL ? 16000 : 25000),
   });
 
   if (!response.ok) {
@@ -194,7 +195,7 @@ async function brightDataScraperRequest(datasetId: string, input: Array<Record<s
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ input }),
-    signal: AbortSignal.timeout(options.requestTimeoutMs ?? 65000),
+    signal: AbortSignal.timeout(providerTimeout(options.requestTimeoutMs ?? 65000, 18000)),
   });
 
   const text = await response.text();
@@ -212,7 +213,7 @@ async function brightDataScraperRequest(datasetId: string, input: Array<Record<s
     return payload;
   }
 
-  const status = await waitForSnapshot(snapshotId, cfg.apiKey, options.pollTimeoutMs ?? 30000);
+  const status = await waitForSnapshot(snapshotId, cfg.apiKey, providerTimeout(options.pollTimeoutMs ?? 30000, 7000));
   if (status !== "ready") {
     throw new Error(`Bright Data scraper snapshot ${snapshotId} is still ${status}.`);
   }
@@ -223,7 +224,7 @@ async function brightDataScraperRequest(datasetId: string, input: Array<Record<s
 async function waitForSnapshot(snapshotId: string, apiKey: string, timeoutMs: number) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    await sleep(3000);
+    await sleep(IS_VERCEL ? 1500 : 3000);
     const response = await fetch(`${SCRAPER_PROGRESS_ENDPOINT}/${snapshotId}`, {
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: AbortSignal.timeout(8000),
@@ -237,6 +238,10 @@ async function waitForSnapshot(snapshotId: string, apiKey: string, timeoutMs: nu
     }
   }
   return "running";
+}
+
+function providerTimeout(requestedMs: number, vercelMaxMs: number) {
+  return IS_VERCEL ? Math.min(requestedMs, vercelMaxMs) : requestedMs;
 }
 
 async function downloadSnapshot(snapshotId: string, apiKey: string) {
@@ -360,7 +365,7 @@ export async function searchPublicSignals(
   searchDepth: SearchDepth = "fast",
   onSignals?: (signals: MarketSignal[]) => void,
 ) {
-  const budget = SEARCH_BUDGETS[searchDepth];
+  const budget = runtimeSearchBudget(searchDepth);
   if (!hasBrightDataCredentials() && !hasBrightDataMcpCredentials()) {
     const signals = demoSignals(queries);
     onSignals?.(signals);
@@ -380,15 +385,73 @@ export async function searchPublicSignals(
   if (selectedDiscoverySignals.length) {
     onSignals?.(filterSignalsByTimeWindow(selectedDiscoverySignals, windowConfig).slice(0, budget.earlyPreviewSignals));
   }
-  const redditSignals = sourceSelection.has("reddit") && hasBrightDataCredentials() ? await enrichRedditSignals(serpSignals, queries, windowConfig, budget) : [];
-  const xSignals = sourceSelection.has("x") && hasBrightDataCredentials() ? await enrichXSignals(serpSignals, windowConfig, budget) : [];
-  const linkedinSignals = sourceSelection.has("linkedin") && hasBrightDataCredentials() ? await enrichLinkedInSignals(serpSignals, windowConfig, budget) : [];
-  const youtubeSignals = sourceSelection.has("youtube") && hasBrightDataCredentials() ? await enrichYouTubeSignals(serpSignals, windowConfig, budget) : [];
+  const enrichmentResults = await Promise.allSettled([
+    sourceSelection.has("reddit") && hasBrightDataCredentials() ? enrichRedditSignals(serpSignals, queries, windowConfig, budget) : Promise.resolve([]),
+    sourceSelection.has("x") && hasBrightDataCredentials() ? enrichXSignals(serpSignals, windowConfig, budget) : Promise.resolve([]),
+    sourceSelection.has("linkedin") && hasBrightDataCredentials() ? enrichLinkedInSignals(serpSignals, windowConfig, budget) : Promise.resolve([]),
+    sourceSelection.has("youtube") && hasBrightDataCredentials() ? enrichYouTubeSignals(serpSignals, windowConfig, budget) : Promise.resolve([]),
+  ]);
+  const [redditSignals, xSignals, linkedinSignals, youtubeSignals] = enrichmentResults.map((result) => result.status === "fulfilled" ? result.value : []);
   const signals = filterSignalsByTimeWindow(dedupeSignals([...redditSignals, ...xSignals, ...linkedinSignals, ...youtubeSignals, ...selectedDiscoverySignals]), windowConfig).slice(0, budget.finalSignals);
   if (signals.length === 0) {
     throw new Error("Bright Data returned no usable public signals.");
   }
   return signals;
+}
+
+function runtimeSearchBudget(searchDepth: SearchDepth): SearchBudget {
+  const budget = SEARCH_BUDGETS[searchDepth];
+  if (!IS_VERCEL) {
+    return budget;
+  }
+
+  if (searchDepth === "deep") {
+    return {
+      ...budget,
+      finalSignals: 90,
+      restQueries: { base: 8, reddit: 3, x: 3, linkedin: 3, youtube: 3 },
+      mcpQueries: { base: 3, reddit: 1, x: 1, linkedin: 1, youtube: 1 },
+      serpResultsPerQuery: 8,
+      mcpScrapeUrls: 1,
+      redditUrls: 3,
+      redditCommentUrls: 1,
+      redditKeywordQueries: 1,
+      redditPostsPerQuery: 8,
+      redditPostParseLimit: 20,
+      redditCommentParseLimit: 24,
+      xUrls: 4,
+      xParseLimit: 20,
+      linkedinUrls: 4,
+      linkedinParseLimit: 20,
+      youtubeUrls: 4,
+      youtubeCommentUrls: 1,
+      youtubeVideoParseLimit: 16,
+      youtubeCommentParseLimit: 20,
+    };
+  }
+
+  return {
+    ...budget,
+    finalSignals: 45,
+    restQueries: { base: 5, reddit: 1, x: 1, linkedin: 1, youtube: 1 },
+    mcpQueries: { base: 2, reddit: 1, x: 1, linkedin: 1, youtube: 1 },
+    serpResultsPerQuery: 6,
+    mcpScrapeUrls: 1,
+    redditUrls: 1,
+    redditCommentUrls: 0,
+    redditKeywordQueries: 0,
+    redditPostsPerQuery: 5,
+    redditPostParseLimit: 10,
+    redditCommentParseLimit: 0,
+    xUrls: 2,
+    xParseLimit: 12,
+    linkedinUrls: 2,
+    linkedinParseLimit: 12,
+    youtubeUrls: 2,
+    youtubeCommentUrls: 0,
+    youtubeVideoParseLimit: 10,
+    youtubeCommentParseLimit: 0,
+  };
 }
 
 async function searchWithBrightDataRest(queries: string[], windowConfig: TimeWindowConfig, sources: SourceSelection, budget: SearchBudget) {
@@ -556,7 +619,7 @@ async function enrichRedditSignals(signals: MarketSignal[], queries: string[], w
     );
   }
 
-  if (redditUrls.length < 2 || budget.redditKeywordQueries > 1) {
+  if (budget.redditKeywordQueries > 0 && (redditUrls.length < 2 || budget.redditKeywordQueries > 1)) {
     tasks.push(
       brightDataScraperRequest(
         REDDIT_POSTS_DATASET_ID,
