@@ -4,6 +4,7 @@ import { auditReportAgainstEvidence, buildEntityRelevanceContext, buildEvidenceC
 import { buildMarketProfile, inferMarketCategoryFromText, marketDefaultsForCategory } from "@/lib/market";
 import { demoSynthesis, hasOpenAiCredentials, synthesizeReport } from "@/lib/openai";
 import { categoryFromExecutiveSummary, displayExecutiveSummary } from "@/lib/report-title";
+import { buildSentimentTrend } from "@/lib/sentiment";
 import { normalizeUrl } from "@/lib/utils";
 import type { AnalysisMode, AnalyzeProgressStage, Evidence, LiveQuotePreview, MarketProfile, MarketSignal, PainRadarReport, SearchDepth, SupportedSource, TimeWindow } from "@/lib/types";
 
@@ -18,6 +19,7 @@ const EVIDENCE_LIMITS: Record<SearchDepth, number> = {
   fast: 60,
   deep: 180,
 };
+const IS_VERCEL = Boolean(process.env.VERCEL);
 
 export async function runAnalysisForInput(
   input: { url: string; analysisMode?: AnalysisMode; timeWindow?: TimeWindow; searchDepth?: SearchDepth; sources?: SupportedSource[] },
@@ -149,7 +151,7 @@ async function runAnalysis(
   try {
     rawSignals = await searchPublicSignals(market.searchQueries, timeWindow, sources, searchDepth, (signals) => setPreviewQuotes?.(previewSignals(signals)));
     setPreviewQuotes?.(previewSignals(rawSignals));
-    if (searchDepth === "deep" && shouldRunSecondPass(rawSignals)) {
+    if (searchDepth === "deep" && !IS_VERCEL && shouldRunSecondPass(rawSignals)) {
       const secondPassSignals = await searchPublicSignals(
         buildSecondPassQueries(market, target),
         timeWindow,
@@ -174,6 +176,8 @@ async function runAnalysis(
     stageNotes.marketDiscovery = `${stageNotes.marketDiscovery}; relevance filter retained ${rawSignals.length} of ${beforeRelevanceCount} collected signals for the target entity/category`;
   }
   market = refineGenericMarketCategory(market, rawSignals);
+  const generatedAt = new Date().toISOString();
+  const sentimentTrend = buildSentimentTrend(rawSignals, timeWindow, generatedAt);
 
   throwIfAborted(signal);
   setStage("evidence");
@@ -204,7 +208,7 @@ async function runAnalysis(
 
   return {
     analyzedUrl: target.modelTarget,
-    generatedAt: new Date().toISOString(),
+    generatedAt,
     analysisMode: target.analysisMode,
     timeWindow,
     searchDepth,
@@ -216,6 +220,7 @@ async function runAnalysis(
       marketDiscovery: stageNotes.marketDiscovery,
       synthesis: providerNotes.length ? stageNotes.synthesis : stageNotes.synthesis,
     },
+    sentimentTrend,
     ...synthesized,
   } satisfies PainRadarReport;
 }

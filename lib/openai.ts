@@ -146,7 +146,7 @@ async function structuredResponse<T>(name: string, schema: Record<string, unknow
     throw new Error("Missing OPENAI_API_KEY");
   }
 
-  const timeoutMs = Number(process.env.OPENAI_TIMEOUT_MS || (process.env.VERCEL ? 22000 : 45000));
+  const timeoutMs = Number(process.env.OPENAI_TIMEOUT_MS || (process.env.VERCEL ? 18000 : 45000));
   const response = await fetch(OPENAI_ENDPOINT, {
     method: "POST",
     headers: {

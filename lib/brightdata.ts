@@ -149,7 +149,7 @@ async function brightDataRequest(body: Record<string, unknown>) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(IS_VERCEL ? 16000 : 25000),
+    signal: AbortSignal.timeout(IS_VERCEL ? 10000 : 25000),
   });
 
   if (!response.ok) {
@@ -195,7 +195,7 @@ async function brightDataScraperRequest(datasetId: string, input: Array<Record<s
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ input }),
-    signal: AbortSignal.timeout(providerTimeout(options.requestTimeoutMs ?? 65000, 18000)),
+    signal: AbortSignal.timeout(providerTimeout(options.requestTimeoutMs ?? 65000, 10000)),
   });
 
   const text = await response.text();
@@ -213,7 +213,7 @@ async function brightDataScraperRequest(datasetId: string, input: Array<Record<s
     return payload;
   }
 
-  const status = await waitForSnapshot(snapshotId, cfg.apiKey, providerTimeout(options.pollTimeoutMs ?? 30000, 7000));
+  const status = await waitForSnapshot(snapshotId, cfg.apiKey, providerTimeout(options.pollTimeoutMs ?? 30000, 4000));
   if (status !== "ready") {
     throw new Error(`Bright Data scraper snapshot ${snapshotId} is still ${status}.`);
   }
@@ -1312,6 +1312,11 @@ function dateField(item: Record<string, unknown>, fields: string[]) {
   return undefined;
 }
 
+function dateFromText(value: string) {
+  const parsed = parsePublishedAt(value);
+  return parsed ? parsed.toISOString() : undefined;
+}
+
 function parsePublishedAt(value: unknown) {
   if (!value) {
     return null;
@@ -1326,20 +1331,28 @@ function parsePublishedAt(value: unknown) {
     return direct;
   }
 
-  const relative = text.match(/^(\d+)\s+(hour|day|week|month|year)s?\s+ago$/i);
-  if (!relative) {
-    return null;
+  const relative = text.match(/(?:^|\b)(\d+)\s+(hour|day|week|month|year)s?\s+ago(?:\b|$)/i);
+  if (relative) {
+    const amount = Number(relative[1]);
+    const unit = relative[2].toLowerCase();
+    const date = new Date();
+    if (unit === "hour") date.setHours(date.getHours() - amount);
+    if (unit === "day") date.setDate(date.getDate() - amount);
+    if (unit === "week") date.setDate(date.getDate() - amount * 7);
+    if (unit === "month") date.setMonth(date.getMonth() - amount);
+    if (unit === "year") date.setFullYear(date.getFullYear() - amount);
+    return date;
   }
 
-  const amount = Number(relative[1]);
-  const unit = relative[2].toLowerCase();
-  const date = new Date();
-  if (unit === "hour") date.setHours(date.getHours() - amount);
-  if (unit === "day") date.setDate(date.getDate() - amount);
-  if (unit === "week") date.setDate(date.getDate() - amount * 7);
-  if (unit === "month") date.setMonth(date.getMonth() - amount);
-  if (unit === "year") date.setFullYear(date.getFullYear() - amount);
-  return date;
+  const monthDate = text.match(/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}\b/i);
+  if (monthDate) {
+    const parsed = new Date(monthDate[0]);
+    if (Number.isFinite(parsed.getTime())) {
+      return parsed;
+    }
+  }
+
+  return null;
 }
 
 function parseSerpPayload(payload: unknown, query: string, limit = 8): MarketSignal[] {
@@ -1364,7 +1377,7 @@ function parseSerpPayload(payload: unknown, query: string, limit = 8): MarketSig
     const url = String(item.link || item.url || item.href || "");
     const title = String(item.title || item.name || `Result for ${query}`);
     const snippet = String(item.description || item.snippet || item.text || "");
-    const publishedAt = dateField(item, ["date", "date_posted", "created_at", "published_at"]);
+    const publishedAt = dateField(item, ["date", "date_posted", "created_at", "published_at"]) || dateFromText(`${title} ${snippet}`);
     return {
       sourceId: createSourceId(query, index, url),
       title,
@@ -1425,6 +1438,7 @@ function parseGoogleHtml(html: string, query: string, limit = 8): MarketSignal[]
       snippet: snippet || `Search result for ${query}`,
       sourceType: "serp",
       query,
+      publishedAt: dateFromText(`${title} ${snippet}`),
       confidence: 68,
       domain: hostFromUrl(url),
       position: signals.length + 1,

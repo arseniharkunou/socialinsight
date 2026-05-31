@@ -4,7 +4,7 @@ import { SEARCH_DEPTH_OPTIONS, SUPPORTED_SOURCE_OPTIONS, TIME_WINDOW_OPTIONS } f
 import type { AnalysisMode, AnalyzeProgressStage, AnalyzeStreamEvent, LiveQuotePreview, SearchDepth, SupportedSource, TimeWindow } from "@/lib/types";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 
 const DEFAULT_SUPPORTED_SOURCES = SUPPORTED_SOURCE_OPTIONS.map((source) => source.value);

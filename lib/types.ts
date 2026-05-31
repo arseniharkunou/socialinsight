@@ -135,11 +135,26 @@ export type PainRadarReport = {
   whatNotToTrustYet: string[];
   recommendedNextSteps: string[];
   sources: Evidence[];
+  sentimentTrend?: SentimentTrend;
   integrationNotes: {
     websiteRetrieval: string;
     marketDiscovery: string;
     synthesis: string;
   };
+};
+
+export type SentimentTrendBucket = {
+  label: string;
+  positive: number;
+  negative: number;
+};
+
+export type SentimentTrend = {
+  buckets: SentimentTrendBucket[];
+  positiveTotal: number;
+  negativeTotal: number;
+  datedCount: number;
+  excludedCount: number;
 };
 
 export type LiveQuotePreview = {

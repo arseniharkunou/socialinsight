@@ -25,6 +25,7 @@ import {
 import { useEffect, useRef, useMemo, useState } from "react";
 import type { CSSProperties, FormEvent } from "react";
 import { displayExecutiveSummary, reportTitle } from "@/lib/report-title";
+import { buildSentimentTrend } from "@/lib/sentiment";
 import { SEARCH_DEPTH_OPTIONS, SUPPORTED_SOURCE_OPTIONS, TIME_WINDOW_OPTIONS } from "@/lib/types";
 import type { AnalysisMode, AnalyzeProgressStage, AnalyzeStreamEvent, Evidence, LiveQuotePreview, PainPoint, PainRadarReport, SearchDepth, SupportedSource, TimeWindow } from "@/lib/types";
 
@@ -56,63 +57,6 @@ const analysisLanes = [
 ];
 
 const MIN_QUOTE_PREVIEW_MS = 2200;
-
-const POSITIVE_SENTIMENT_TERMS = [
-  "accurate",
-  "best",
-  "better",
-  "easy",
-  "excellent",
-  "fast",
-  "good",
-  "great",
-  "happy",
-  "helpful",
-  "impressed",
-  "love",
-  "prefer",
-  "recommend",
-  "recommended",
-  "recommendation",
-  "reliable",
-  "saves",
-  "success",
-  "solved",
-  "testimonial",
-  "useful",
-  "valuable",
-  "works well",
-];
-
-const NEGATIVE_SENTIMENT_TERMS = [
-  "bad",
-  "broken",
-  "bug",
-  "can't",
-  "complaint",
-  "complex",
-  "concern",
-  "confusing",
-  "costly",
-  "delay",
-  "difficult",
-  "doesn't",
-  "expensive",
-  "failed",
-  "frustrating",
-  "hard",
-  "hate",
-  "issue",
-  "limitation",
-  "missing",
-  "pain",
-  "poor",
-  "problem",
-  "slow",
-  "unreliable",
-  "workaround",
-  "worse",
-];
 
 export default function Home() {
   const [url, setUrl] = useState("");
@@ -191,7 +135,7 @@ export default function Home() {
       });
 
       if (!completed && !controller.signal.aborted) {
-        throw new Error("Analysis stream ended before a report was generated.");
+        throw new Error("Analysis stream ended before a report was generated. On Vercel, this usually means the analysis function timed out before it could send the final report.");
       }
     } catch (reason) {
       setError(describeAnalysisError(reason));
@@ -840,22 +784,8 @@ function pluralize(word: string, count: number) {
   return count === 1 ? word : `${word}s`;
 }
 
-type SentimentTrendBucket = {
-  label: string;
-  positive: number;
-  negative: number;
-};
-
-type SentimentTrend = {
-  buckets: SentimentTrendBucket[];
-  positiveTotal: number;
-  negativeTotal: number;
-  datedCount: number;
-  excludedCount: number;
-};
-
 function SentimentTrendPanel({ report }: { report: PainRadarReport }) {
-  const trend = useMemo(() => buildSentimentTrend(report), [report]);
+  const trend = useMemo(() => report.sentimentTrend || buildSentimentTrend(report.sources, report.timeWindow, report.generatedAt), [report]);
   const maxValue = Math.max(1, ...trend.buckets.flatMap((bucket) => [bucket.positive, bucket.negative]));
   const hasTrend = trend.positiveTotal + trend.negativeTotal > 0;
   const positivePath = chartPath(trend.buckets.map((bucket) => bucket.positive), maxValue);
@@ -911,96 +841,10 @@ function SentimentTrendPanel({ report }: { report: PainRadarReport }) {
         )}
       </div>
       <p className="mt-3 text-xs leading-5 text-[var(--muted)]">
-        Neutral, mixed, and undated sources are excluded from the line counts. {trend.excludedCount} {pluralize("source", trend.excludedCount)} excluded.
+        Built from the broader dated evidence set when available, not just top pain points. Neutral, mixed, and undated sources are excluded from the line counts. {trend.excludedCount} {pluralize("source", trend.excludedCount)} excluded.
       </p>
     </section>
   );
-}
-
-function buildSentimentTrend(report: PainRadarReport): SentimentTrend {
-  const end = parseDate(report.generatedAt) || new Date();
-  const bucketCount = trendBucketCount(report.timeWindow);
-  const start = timelineStart(end, report.timeWindow);
-  const duration = Math.max(1, end.getTime() - start.getTime());
-  const bucketMs = duration / bucketCount;
-  const buckets = Array.from({ length: bucketCount }, (_, index) => {
-    const bucketStart = new Date(start.getTime() + bucketMs * index);
-    return {
-      label: trendBucketLabel(bucketStart, report.timeWindow),
-      positive: 0,
-      negative: 0,
-    };
-  });
-
-  let datedCount = 0;
-  let excludedCount = 0;
-
-  for (const source of report.sources) {
-    const publishedAt = parseDate(source.publishedAt);
-    if (!publishedAt || publishedAt < start || publishedAt > end) {
-      excludedCount += 1;
-      continue;
-    }
-
-    datedCount += 1;
-    const sentiment = sourceSentiment(source);
-    if (sentiment !== "positive" && sentiment !== "negative") {
-      excludedCount += 1;
-      continue;
-    }
-
-    const bucketIndex = Math.min(bucketCount - 1, Math.max(0, Math.floor((publishedAt.getTime() - start.getTime()) / bucketMs)));
-    buckets[bucketIndex][sentiment] += 1;
-  }
-
-  return {
-    buckets,
-    positiveTotal: buckets.reduce((sum, bucket) => sum + bucket.positive, 0),
-    negativeTotal: buckets.reduce((sum, bucket) => sum + bucket.negative, 0),
-    datedCount,
-    excludedCount,
-  };
-}
-
-function sourceSentiment(source: Evidence) {
-  const text = `${source.title} ${source.snippet}`.toLowerCase();
-  const positiveScore = countTermMatches(text, POSITIVE_SENTIMENT_TERMS);
-  const negativeScore = countTermMatches(text, NEGATIVE_SENTIMENT_TERMS);
-
-  if (positiveScore > negativeScore) {
-    return "positive";
-  }
-  if (negativeScore > positiveScore) {
-    return "negative";
-  }
-  return "neutral";
-}
-
-function countTermMatches(text: string, terms: string[]) {
-  return terms.reduce((count, term) => count + (text.includes(term) ? 1 : 0), 0);
-}
-
-function trendBucketCount(timeWindow: TimeWindow) {
-  if (timeWindow === "30d") return 30;
-  if (timeWindow === "90d") return 13;
-  if (timeWindow === "6m") return 6;
-  return 12;
-}
-
-function timelineStart(end: Date, timeWindow: TimeWindow) {
-  const start = new Date(end);
-  if (timeWindow === "30d") start.setDate(start.getDate() - 30);
-  if (timeWindow === "90d") start.setDate(start.getDate() - 90);
-  if (timeWindow === "6m") start.setMonth(start.getMonth() - 6);
-  if (timeWindow === "1y") start.setFullYear(start.getFullYear() - 1);
-  return start;
-}
-
-function trendBucketLabel(date: Date, timeWindow: TimeWindow) {
-  return date.toLocaleDateString("en-US", {
-    month: "short",
-    day: timeWindow === "6m" || timeWindow === "1y" ? undefined : "numeric",
-  });
 }
 
 function chartPath(values: number[], maxValue: number) {
@@ -1044,14 +888,6 @@ function xAxisLabelIndexes(length: number) {
   }
   indexes.add(length - 1);
   return indexes;
-}
-
-function parseDate(value?: string) {
-  if (!value) {
-    return null;
-  }
-  const date = new Date(value);
-  return Number.isFinite(date.getTime()) ? date : null;
 }
 
 function Metric({ href, label, value }: { href: string; label: string; value: string; tone: "teal" | "amber" | "crimson" }) {
