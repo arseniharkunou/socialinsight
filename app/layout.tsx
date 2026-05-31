@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "PainFinder",
+  title: "Social Insight",
   description: "Discover customer pain points from public web conversations.",
 };
 

@@ -211,7 +211,7 @@ export async function synthesizeReport(input: {
   const report = await structuredResponse<ReportSynthesis>(
     "painfinder_report",
     reportSchema,
-    `You are PainFinder, a rigorous product intelligence analyst.
+    `You are Social Insight, a rigorous product intelligence analyst.
 
 Goal: identify recurring customer pain points, positive themes, frustrations, feature requests, workarounds, competitor mentions, and product opportunities from public web signals.
 

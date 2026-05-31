@@ -295,7 +295,7 @@ function describeAnalysisError(reason: unknown) {
   }
 
   if (reason instanceof TypeError && /failed to fetch|networkerror|load failed/i.test(reason.message)) {
-    return "Could not reach the PainFinder API. The local dev server may have stopped or restarted. Start it on the same port as this page, then run the analysis again.";
+    return "Could not reach the Social Insight API. The local dev server may have stopped or restarted. Start it on the same port as this page, then run the analysis again.";
   }
 
   if (reason instanceof SyntaxError) {
@@ -320,7 +320,7 @@ function PageLogo() {
         <MessageCircleMore size={22} />
       </div>
       <div>
-        <h1 className="text-xl font-semibold leading-tight tracking-normal [font-family:Arial,Helvetica,sans-serif]">PainFinder</h1>
+        <h1 className="text-xl font-semibold leading-tight tracking-normal [font-family:Arial,Helvetica,sans-serif]">Social Insight</h1>
         <p className="text-sm text-[var(--muted)]">Powered by BrightData</p>
       </div>
     </Link>
@@ -551,7 +551,7 @@ function HeroState({
           <p className="max-w-5xl text-base leading-7 text-[var(--muted)]">
             {report
               ? displayExecutiveSummary(report.executiveSummary)
-              : "Enter a product, company, or domain. PainFinder identifies the market, generates evidence-seeking searches, gathers public signals with Bright Data, scores the evidence, and synthesizes a decision-ready report with confidence and caveats."}
+              : "Enter a product, company, or domain. Social Insight identifies the market, generates evidence-seeking searches, gathers public signals with Bright Data, scores the evidence, and synthesizes a decision-ready report with confidence and caveats."}
           </p>
         )}
       </div>
