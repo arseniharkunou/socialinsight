@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { runAnalysisForInput } from "@/lib/analysis";
+import { runAnalysisForInput, runAnalysisForInputWithDeadline } from "@/lib/analysis";
 import { SUPPORTED_SOURCE_OPTIONS } from "@/lib/types";
 import type { AnalysisMode, AnalyzeJobSnapshot, LiveQuotePreview, SearchDepth, SupportedSource, TimeWindow } from "@/lib/types";
 
@@ -34,11 +34,11 @@ export function startAnalysisJob(input: AnalysisJobInput) {
   return publicJob(job);
 }
 
-export async function runAnalysisJobInline(input: AnalysisJobInput) {
+export async function runAnalysisJobInline(input: AnalysisJobInput, deadlineMs?: number) {
   const job = createInternalJob(input);
   jobMap().set(job.id, job);
   persistJob(job).catch(() => undefined);
-  await runJob(job, input);
+  await runJob(job, input, deadlineMs);
   return publicJob(job);
 }
 
@@ -86,15 +86,35 @@ export async function cancelAnalysisJob(id: string) {
   return publicJob(job);
 }
 
-async function runJob(job: InternalJob, input: AnalysisJobInput) {
+async function runJob(job: InternalJob, input: AnalysisJobInput, deadlineMs?: number) {
   updateJob(job, { status: "running", stage: "website" });
+  let acceptingAnalysisUpdates = true;
+  const updateAnalysisStage = (stage: AnalyzeJobSnapshot["stage"]) => {
+    if (acceptingAnalysisUpdates) {
+      updateJob(job, { status: "running", stage });
+    }
+  };
+  const updateAnalysisQuotes = (previewQuotes: LiveQuotePreview[]) => {
+    if (acceptingAnalysisUpdates) {
+      updatePreviewQuotes(job, previewQuotes);
+    }
+  };
   try {
-    const report = await runAnalysisForInput(
-      input,
-      (stage) => updateJob(job, { status: "running", stage }),
-      (previewQuotes) => updatePreviewQuotes(job, previewQuotes),
-      job.abortController.signal,
-    );
+    const report = deadlineMs
+      ? await runAnalysisForInputWithDeadline(
+        input,
+        updateAnalysisStage,
+        updateAnalysisQuotes,
+        job.abortController.signal,
+        deadlineMs,
+      )
+      : await runAnalysisForInput(
+        input,
+        updateAnalysisStage,
+        updateAnalysisQuotes,
+        job.abortController.signal,
+      );
+    acceptingAnalysisUpdates = false;
 
     if (job.abortController.signal.aborted || job.status === "cancelled") {
       updateJob(job, { status: "cancelled", error: "Analysis stopped." });
@@ -108,6 +128,7 @@ async function runJob(job: InternalJob, input: AnalysisJobInput) {
       report,
     });
   } catch (error) {
+    acceptingAnalysisUpdates = false;
     const aborted = error instanceof DOMException && error.name === "AbortError";
     updateJob(job, {
       status: aborted ? "cancelled" : "failed",

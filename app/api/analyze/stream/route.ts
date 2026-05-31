@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { runAnalysisForInput } from "@/lib/analysis";
+import { runAnalysisForInputWithDeadline } from "@/lib/analysis";
 import { SEARCH_DEPTH_OPTIONS, SUPPORTED_SOURCE_OPTIONS, TIME_WINDOW_OPTIONS } from "@/lib/types";
 import type { AnalysisMode, AnalyzeProgressStage, AnalyzeStreamEvent, LiveQuotePreview, SearchDepth, SupportedSource, TimeWindow } from "@/lib/types";
 
@@ -39,16 +39,31 @@ export async function POST(request: Request) {
     const stream = new ReadableStream({
       async start(controller) {
         const send = (event: AnalyzeStreamEvent) => {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+          if (closed) {
+            return;
+          }
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+          } catch {
+            closed = true;
+          }
         };
+        let closed = false;
 
         const heartbeat = setInterval(() => {
-          controller.enqueue(encoder.encode(": keep-alive\n\n"));
-        }, 8000);
+          if (closed) {
+            return;
+          }
+          try {
+            controller.enqueue(encoder.encode(": keep-alive\n\n"));
+          } catch {
+            closed = true;
+          }
+        }, 3000);
 
         try {
           send({ type: "progress", stage: "website" });
-          const report = await runAnalysisForInput(
+          const report = await runAnalysisForInputWithDeadline(
             {
               url: targetUrl,
               analysisMode,
@@ -59,14 +74,20 @@ export async function POST(request: Request) {
             (stage: AnalyzeProgressStage) => send({ type: "progress", stage }),
             (quotes: LiveQuotePreview[]) => send({ type: "preview_quotes", quotes }),
             request.signal,
+            analysisDeadlineMs(),
           );
           send({ type: "complete", report });
         } catch (error) {
           const message = error instanceof Error ? error.message : "Analysis failed";
           send({ type: "error", error: message });
         } finally {
+          closed = true;
           clearInterval(heartbeat);
-          controller.close();
+          try {
+            controller.close();
+          } catch {
+            // Stream may already be closed by the platform or client.
+          }
         }
       },
     });
@@ -83,4 +104,12 @@ export async function POST(request: Request) {
     const message = error instanceof Error ? error.message : "Unexpected analysis error";
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
+}
+
+function analysisDeadlineMs() {
+  const configured = Number(process.env.ANALYSIS_FINAL_DEADLINE_MS || process.env.ANALYSIS_STREAM_DEADLINE_MS || 0);
+  if (Number.isFinite(configured) && configured >= 1000) {
+    return configured;
+  }
+  return process.env.VERCEL ? 7500 : 120000;
 }

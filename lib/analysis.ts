@@ -34,6 +34,138 @@ export async function runAnalysisForInput(
   return runAnalysis(target, timeWindow, searchDepth, input.sources, setStage, setPreviewQuotes, signal);
 }
 
+export async function runAnalysisForInputWithDeadline(
+  input: { url: string; analysisMode?: AnalysisMode; timeWindow?: TimeWindow; searchDepth?: SearchDepth; sources?: SupportedSource[] },
+  setStage: (stage: AnalyzeProgressStage) => void,
+  setPreviewQuotes: ((quotes: LiveQuotePreview[]) => void) | undefined,
+  signal: AbortSignal | undefined,
+  deadlineMs: number,
+) {
+  const timeoutController = new AbortController();
+  const combinedSignal = combineAbortSignals(signal, timeoutController.signal);
+  let timedOut = false;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  const analysisPromise = runAnalysisForInput(input, setStage, setPreviewQuotes, combinedSignal);
+  analysisPromise.catch(() => undefined);
+
+  const timeoutPromise = new Promise<PainRadarReport>((resolve) => {
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      timeoutController.abort();
+      setStage("synthesis");
+      resolve(buildFallbackReportForInput(input, `Live analysis reached the deployed runtime deadline after ${Math.round(deadlineMs / 1000)} seconds. This completed report uses directional fallback evidence instead of failing the run.`));
+    }, deadlineMs);
+  });
+
+  try {
+    return await Promise.race([analysisPromise, timeoutPromise]);
+  } catch (error) {
+    if (timedOut && !signal?.aborted) {
+      return buildFallbackReportForInput(input, `Live analysis reached the deployed runtime deadline after ${Math.round(deadlineMs / 1000)} seconds. This completed report uses directional fallback evidence instead of failing the run.`);
+    }
+    throw error;
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
+export function buildFallbackReportForInput(
+  input: { url: string; analysisMode?: AnalysisMode; timeWindow?: TimeWindow; searchDepth?: SearchDepth; sources?: SupportedSource[] },
+  reason: string,
+): PainRadarReport {
+  const analysisMode = input.analysisMode === "category" ? "category" : "company";
+  const timeWindow = input.timeWindow || "1y";
+  const searchDepth = input.searchDepth || "fast";
+  const target = resolveAnalysisTarget(input.url, analysisMode);
+  const websiteText = target.analysisMode === "category"
+    ? `The user selected category analysis for: ${target.label}. Generate a directional category report from fallback public-signal patterns.`
+    : `The user entered this product, company, or domain name: ${target.label}. Generate a directional report from fallback public-signal patterns.`;
+  let market = buildMarketProfile(target.modelTarget, websiteText, target.analysisMode);
+  market = normalizeMarketIdentity(market, target);
+  const relevanceContext = buildEntityRelevanceContext({
+    targetLabel: target.label,
+    websiteUrl: target.websiteUrl,
+    market,
+    websiteText,
+    analysisMode: target.analysisMode,
+  });
+  market = {
+    ...market,
+    searchQueries: expandMarketQueriesForEntity(market, relevanceContext),
+  };
+  const generatedAt = new Date().toISOString();
+  let rawSignals: MarketSignal[] = demoSignals(market.searchQueries).map((signal, index) => ({
+    ...signal,
+    publishedAt: datedFallbackSignalDate(index, generatedAt),
+  }));
+  rawSignals = filterAndRankSignalsForRelevance(rawSignals, relevanceContext, { allowFallback: true });
+  market = refineGenericMarketCategory(market, rawSignals);
+  const sentimentTrend = buildSentimentTrend(rawSignals, timeWindow, generatedAt);
+  const signals = extractEvidenceCards(rawSignals, market, { limit: EVIDENCE_LIMITS[searchDepth], diversify: searchDepth === "deep" });
+  const evidenceClusters = buildEvidenceClusters(signals);
+  let synthesized = demoSynthesis(market, signals, target.analysisMode);
+  synthesized = validateEvidenceIds(synthesized, signals);
+  synthesized = auditReportAgainstEvidence(synthesized, signals, evidenceClusters);
+  synthesized = {
+    ...synthesized,
+    executiveSummary: displayExecutiveSummary(synthesized.executiveSummary),
+    whatNotToTrustYet: [
+      reason,
+      ...synthesized.whatNotToTrustYet.filter((item) => item !== reason),
+    ].slice(0, 6),
+  };
+
+  return {
+    analyzedUrl: target.modelTarget,
+    generatedAt,
+    analysisMode: target.analysisMode,
+    timeWindow,
+    searchDepth,
+    mode: "demo",
+    market,
+    sources: signals,
+    integrationNotes: {
+      websiteRetrieval: "Skipped live website retrieval because the deployed runtime deadline was reached.",
+      marketDiscovery: reason,
+      synthesis: "Deterministic fallback synthesis returned before Vercel could close the request.",
+    },
+    sentimentTrend,
+    ...synthesized,
+  };
+}
+
+function combineAbortSignals(...signals: Array<AbortSignal | undefined>) {
+  const activeSignals = signals.filter((activeSignal): activeSignal is AbortSignal => Boolean(activeSignal));
+  if (activeSignals.length === 0) {
+    return undefined;
+  }
+  if (activeSignals.length === 1) {
+    return activeSignals[0];
+  }
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any(activeSignals);
+  }
+
+  const controller = new AbortController();
+  for (const activeSignal of activeSignals) {
+    if (activeSignal.aborted) {
+      controller.abort();
+      break;
+    }
+    activeSignal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+  return controller.signal;
+}
+
+function datedFallbackSignalDate(index: number, generatedAt: string) {
+  const date = new Date(generatedAt);
+  date.setMonth(date.getMonth() - Math.min(index, 11));
+  return date.toISOString();
+}
+
 export function resolveAnalysisTarget(input: string, analysisMode: AnalysisMode): AnalysisTarget {
   const trimmed = input.trim().replace(/\s+/g, " ");
   if (!trimmed) {

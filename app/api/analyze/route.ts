@@ -39,11 +39,19 @@ export async function POST(request: Request) {
       sources: sources.length ? sources : DEFAULT_SUPPORTED_SOURCES,
     };
     const job = process.env.VERCEL
-      ? await runAnalysisJobInline(input)
+      ? await runAnalysisJobInline(input, analysisDeadlineMs())
       : startAnalysisJob(input);
     return NextResponse.json<AnalyzeJobResponse>({ ok: true, job }, { status: process.env.VERCEL ? 200 : 202 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected analysis error";
     return NextResponse.json<AnalyzeJobResponse>({ ok: false, error: message }, { status: 500 });
   }
+}
+
+function analysisDeadlineMs() {
+  const configured = Number(process.env.ANALYSIS_FINAL_DEADLINE_MS || process.env.ANALYSIS_STREAM_DEADLINE_MS || 0);
+  if (Number.isFinite(configured) && configured >= 1000) {
+    return configured;
+  }
+  return process.env.VERCEL ? 7500 : 120000;
 }
