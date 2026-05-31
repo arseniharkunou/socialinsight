@@ -1,0 +1,62 @@
+import { NextResponse } from "next/server";
+import { after } from "next/server";
+import { createPainPointDeepenAnalysisJob, runPainPointDeepenAnalysisJob, startPainPointDeepenAnalysisJob } from "@/lib/analysis-jobs";
+import { hasSupabaseAnalysisStore } from "@/lib/supabase-analysis-store";
+import { SUPPORTED_SOURCE_OPTIONS } from "@/lib/types";
+import type { AnalyzeJobResponse, PainRadarReport, SupportedSource } from "@/lib/types";
+
+export const runtime = "nodejs";
+export const maxDuration = 600;
+
+const DEFAULT_SUPPORTED_SOURCES = SUPPORTED_SOURCE_OPTIONS.map((source) => source.value);
+
+export async function POST(request: Request) {
+  try {
+    const body = (await request.json()) as {
+      report?: PainRadarReport;
+      painIndex?: number;
+      sources?: SupportedSource[];
+    };
+    if (!body.report?.analyzedUrl) {
+      return noStoreJson<AnalyzeJobResponse>({ ok: false, error: "A completed report is required before digging into a pain point." }, 400);
+    }
+    const painIndex = body.painIndex;
+    if (typeof painIndex !== "number" || !Number.isInteger(painIndex) || painIndex < 0 || painIndex >= body.report.topPainPoints.length) {
+      return noStoreJson<AnalyzeJobResponse>({ ok: false, error: "A valid pain point is required." }, 400);
+    }
+
+    const sourceValues = new Set(DEFAULT_SUPPORTED_SOURCES);
+    const sources = Array.isArray(body.sources)
+      ? body.sources.filter((source): source is SupportedSource => sourceValues.has(source))
+      : DEFAULT_SUPPORTED_SOURCES;
+    const input = {
+      report: body.report,
+      painIndex,
+      sources: sources.length ? sources : DEFAULT_SUPPORTED_SOURCES,
+    };
+
+    if (process.env.VERCEL && hasSupabaseAnalysisStore()) {
+      const job = await createPainPointDeepenAnalysisJob(input);
+      after(async () => {
+        await runPainPointDeepenAnalysisJob(job.id, input);
+      });
+      return noStoreJson<AnalyzeJobResponse>({ ok: true, job }, 202);
+    }
+
+    const job = await startPainPointDeepenAnalysisJob(input);
+    return noStoreJson<AnalyzeJobResponse>({ ok: true, job }, 202);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unexpected pain point deep research error";
+    return noStoreJson<AnalyzeJobResponse>({ ok: false, error: message }, 500);
+  }
+}
+
+function noStoreJson<T>(payload: T, status: number) {
+  return NextResponse.json<T>(payload, {
+    status,
+    headers: {
+      "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate",
+      Pragma: "no-cache",
+    },
+  });
+}

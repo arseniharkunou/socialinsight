@@ -83,6 +83,7 @@ export type PainPoint = {
   businessImplication: string;
   validationStep: string;
   changeStatus?: "new" | "updated";
+  deepenNote?: string;
 };
 
 export type FeatureRequest = {

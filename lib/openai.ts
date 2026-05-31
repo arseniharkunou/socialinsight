@@ -1,9 +1,14 @@
 import type { EvidenceCluster } from "@/lib/insight-quality";
-import type { AnalysisMode, MarketProfile, PainRadarReport, MarketSignal, SearchDepth } from "@/lib/types";
+import type { AnalysisMode, MarketProfile, PainPoint, PainRadarReport, MarketSignal, SearchDepth } from "@/lib/types";
 import { truncate } from "@/lib/utils";
 
 const OPENAI_ENDPOINT = "https://api.openai.com/v1/responses";
 type ReportSynthesis = Omit<PainRadarReport, "analyzedUrl" | "generatedAt" | "analysisMode" | "timeWindow" | "searchDepth" | "mode" | "market" | "sources" | "integrationNotes">;
+type FocusedPainPointSynthesis = {
+  changed: boolean;
+  note: string;
+  painPoint: PainPoint;
+};
 
 const reportSchema = {
   type: "object",
@@ -134,6 +139,57 @@ const reportSchema = {
     },
     whatNotToTrustYet: { type: "array", items: { type: "string" } },
     recommendedNextSteps: { type: "array", items: { type: "string" } },
+  },
+};
+
+const painPointSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "title",
+    "affectedPersona",
+    "summary",
+    "severity",
+    "frequency",
+    "confidence",
+    "evidenceIds",
+    "quoteProofs",
+    "businessImplication",
+    "validationStep",
+  ],
+  properties: {
+    title: { type: "string" },
+    affectedPersona: { type: "string" },
+    summary: { type: "string" },
+    severity: { type: "number" },
+    frequency: { type: "number" },
+    confidence: { type: "number" },
+    evidenceIds: { type: "array", items: { type: "string" } },
+    quoteProofs: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["quote", "sourceId"],
+        properties: {
+          quote: { type: "string" },
+          sourceId: { type: "string" },
+        },
+      },
+    },
+    businessImplication: { type: "string" },
+    validationStep: { type: "string" },
+  },
+};
+
+const focusedPainPointSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["changed", "note", "painPoint"],
+  properties: {
+    changed: { type: "boolean" },
+    note: { type: "string" },
+    painPoint: painPointSchema,
   },
 };
 
@@ -306,6 +362,67 @@ Produce concise but decision-ready JSON.`,
   return normalizeReportScores(report);
 }
 
+export async function synthesizeDeepenedPainPoint(input: {
+  previousReport: PainRadarReport;
+  painPoint: PainPoint;
+  painIndex: number;
+  market: MarketProfile;
+  signals: MarketSignal[];
+  evidenceClusters?: EvidenceCluster[];
+  newSourceIds: string[];
+  selectedSources: string[];
+}): Promise<FocusedPainPointSynthesis> {
+  if (!hasOpenAiCredentials()) {
+    throw new Error("OpenAI API key is required to synthesize a deepened pain point.");
+  }
+
+  const response = await structuredResponse<FocusedPainPointSynthesis>(
+    "social_insight_deepened_pain_point",
+    focusedPainPointSchema,
+    `You are Social Insight, a rigorous product intelligence analyst.
+
+Goal: deepen one existing pain point using a focused research pass. Update only this pain point unless the new evidence clearly refines or splits the specific issue. Do not rewrite the whole report.
+
+Rules:
+- Focus on the pain point that originated this query.
+- Use only selected source families for this focused pass: ${input.selectedSources.join(", ")}.
+- Prioritize public customer and market commentary over company-authored content.
+- Treat source IDs in newSourceIds as newly discovered focused evidence.
+- Set changed=true only when new evidence materially improves specificity, adds direct customer quotes, adds meaningful independent source support, or changes severity/frequency/confidence.
+- Set changed=false when the new evidence is duplicative, weak, generic, company-authored, or does not materially deepen this specific pain. In that case return the original pain point content and put a concise dismissible explanation in note.
+- If changed=true, preserve the pain point's core topic, add stronger quoteProofs and evidenceIds, and update scores only when evidence warrants it.
+- Every evidenceId and quoteProof sourceId must come from the provided signals.
+- quoteProofs must use only words present in the cited source title or snippet. Do not invent quotes.
+- Keep the title specific to the target/category. Avoid generic titles like "proof of value is hard to evaluate" unless the source language directly supports that phrasing.
+
+Pain point index: ${input.painIndex}
+Current pain point:
+${JSON.stringify(input.painPoint, null, 2)}
+
+Report context:
+${JSON.stringify(compactPreviousReport(input.previousReport), null, 2)}
+
+New source IDs:
+${JSON.stringify(input.newSourceIds, null, 2)}
+
+Market profile:
+${JSON.stringify(input.market, null, 2)}
+
+Evidence clusters:
+${JSON.stringify(input.evidenceClusters || [], null, 2)}
+
+Combined public signals:
+${JSON.stringify(input.signals.slice(0, 520), null, 2)}
+
+Produce concise JSON.`,
+  );
+
+  return {
+    ...response,
+    painPoint: normalizePainPointScores(response.painPoint),
+  };
+}
+
 function compactPreviousReport(report: PainRadarReport) {
   return {
     analyzedUrl: report.analyzedUrl,
@@ -321,6 +438,18 @@ function compactPreviousReport(report: PainRadarReport) {
     opportunities: report.opportunities,
     whatNotToTrustYet: report.whatNotToTrustYet,
     sourceCount: report.sources.length,
+  };
+}
+
+function normalizePainPointScores(pain: PainPoint): PainPoint {
+  const scores = [pain.severity, pain.frequency, pain.confidence];
+  const looksTenPoint = scores.every((score) => Number.isFinite(score) && score >= 0 && score <= 10);
+  const multiplier = looksTenPoint ? 10 : 1;
+  return {
+    ...pain,
+    severity: normalizeScore(pain.severity, multiplier),
+    frequency: normalizeScore(pain.frequency, multiplier),
+    confidence: normalizeScore(pain.confidence, multiplier),
   };
 }
 

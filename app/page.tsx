@@ -70,19 +70,26 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [deepening, setDeepening] = useState(false);
   const [deepenProgressIndex, setDeepenProgressIndex] = useState(0);
+  const [deepeningPainIndex, setDeepeningPainIndex] = useState<number | null>(null);
+  const [painDeepenProgressIndex, setPainDeepenProgressIndex] = useState(0);
+  const [dismissedPainNotes, setDismissedPainNotes] = useState<Set<string>>(() => new Set());
   const [progressIndex, setProgressIndex] = useState(0);
   const [previewQuotes, setPreviewQuotes] = useState<LiveQuotePreview[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
   const deepenAbortControllerRef = useRef<AbortController | null>(null);
+  const painDeepenAbortControllerRef = useRef<AbortController | null>(null);
   const previewQuotesShownAtRef = useRef<number | null>(null);
 
   function resetToStart() {
     const activeController = abortControllerRef.current;
     const activeDeepenController = deepenAbortControllerRef.current;
+    const activePainDeepenController = painDeepenAbortControllerRef.current;
     abortControllerRef.current = null;
     deepenAbortControllerRef.current = null;
+    painDeepenAbortControllerRef.current = null;
     activeController?.abort();
     activeDeepenController?.abort();
+    activePainDeepenController?.abort();
     setUrl("");
     setAnalysisMode("company");
     setTimeWindow("1y");
@@ -93,6 +100,9 @@ export default function Home() {
     setLoading(false);
     setDeepening(false);
     setDeepenProgressIndex(0);
+    setDeepeningPainIndex(null);
+    setPainDeepenProgressIndex(0);
+    setDismissedPainNotes(new Set());
     setProgressIndex(0);
     setPreviewQuotes([]);
     previewQuotesShownAtRef.current = null;
@@ -111,6 +121,7 @@ export default function Home() {
     setLoading(true);
     setError("");
     setReport(null);
+    setDismissedPainNotes(new Set());
     setProgressIndex(0);
     setPreviewQuotes([]);
     previewQuotesShownAtRef.current = null;
@@ -210,6 +221,7 @@ export default function Home() {
         setDeepenProgressIndex(job.status === "completed" ? progressSteps.length : progressStageIndexes[job.stage]);
 
         if (job.status === "completed" && job.report) {
+          setDismissedPainNotes(new Set());
           setReport({
             ...job.report,
             analysisMode: job.report.analysisMode || job.analysisMode,
@@ -235,6 +247,73 @@ export default function Home() {
       }
       setDeepening(false);
     }
+  }
+
+  async function runPainPointDigDeeper(painIndex: number) {
+    if (!report || deepeningPainIndex !== null) {
+      return;
+    }
+
+    painDeepenAbortControllerRef.current?.abort();
+    const controller = new AbortController();
+    painDeepenAbortControllerRef.current = controller;
+    setDeepeningPainIndex(painIndex);
+    setPainDeepenProgressIndex(0);
+    setError("");
+
+    try {
+      const response = await fetch("/api/analyze/deepen-pain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ report, painIndex, sources: selectedSources }),
+        cache: "no-store",
+        signal: controller.signal,
+      });
+
+      const startPayload = await readJobResponse(response);
+      if (!startPayload.ok) {
+        throw new Error(startPayload.error);
+      }
+
+      await pollAnalysisJob(startPayload.job.id, controller.signal, async (payload) => {
+        if (!payload.ok) {
+          throw new Error(payload.error);
+        }
+
+        const job = payload.job;
+        setPainDeepenProgressIndex(job.status === "completed" ? progressSteps.length : progressStageIndexes[job.stage]);
+
+        if (job.status === "completed" && job.report) {
+          setDismissedPainNotes(new Set());
+          setReport({
+            ...job.report,
+            analysisMode: job.report.analysisMode || job.analysisMode,
+            searchDepth: job.report.searchDepth || job.searchDepth,
+          });
+          setPainDeepenProgressIndex(progressSteps.length);
+          return true;
+        }
+
+        if (job.status === "failed" || job.status === "cancelled") {
+          throw new Error(job.error || "Pain point deep research failed.");
+        }
+
+        return false;
+      });
+    } catch (reason) {
+      if (painDeepenAbortControllerRef.current === controller) {
+        setError(describeAnalysisError(reason));
+      }
+    } finally {
+      if (painDeepenAbortControllerRef.current === controller) {
+        painDeepenAbortControllerRef.current = null;
+      }
+      setDeepeningPainIndex(null);
+    }
+  }
+
+  function dismissPainNote(key: string) {
+    setDismissedPainNotes((current) => new Set([...current, key]));
   }
 
   return (
@@ -269,7 +348,14 @@ export default function Home() {
                 ) : (
                   <>
                     <HeroState report={report} error={error} deepening={deepening} onDigDeeper={runDigDeeper} />
-                    <ReportDashboard report={report} />
+                    <ReportDashboard
+                      report={report}
+                      deepeningPainIndex={deepeningPainIndex}
+                      painDeepenProgressIndex={painDeepenProgressIndex}
+                      dismissedPainNotes={dismissedPainNotes}
+                      onDigDeeperPain={runPainPointDigDeeper}
+                      onDismissPainNote={dismissPainNote}
+                    />
                   </>
                 )}
               </div>
@@ -727,14 +813,36 @@ function LiveQuoteRotator({ quotes, activeIndex }: { quotes: LiveQuotePreview[];
   );
 }
 
-function ReportDashboard({ report }: { report: PainRadarReport }) {
+function ReportDashboard({
+  report,
+  deepeningPainIndex,
+  painDeepenProgressIndex,
+  dismissedPainNotes,
+  onDigDeeperPain,
+  onDismissPainNote,
+}: {
+  report: PainRadarReport;
+  deepeningPainIndex: number | null;
+  painDeepenProgressIndex: number;
+  dismissedPainNotes: Set<string>;
+  onDigDeeperPain: (painIndex: number) => void;
+  onDismissPainNote: (key: string) => void;
+}) {
   return (
     <section className="space-y-4">
       <SourceSummary sources={report.sources} />
       <WhatsWorkingPanel report={report} />
       <SentimentTrendPanel report={report} />
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]">
-        <PainPointPanel pains={report.topPainPoints} sources={report.sources} />
+        <PainPointPanel
+          pains={report.topPainPoints}
+          sources={report.sources}
+          deepeningPainIndex={deepeningPainIndex}
+          progressIndex={painDeepenProgressIndex}
+          dismissedPainNotes={dismissedPainNotes}
+          onDigDeeperPain={onDigDeeperPain}
+          onDismissPainNote={onDismissPainNote}
+        />
         <OpportunityPanel report={report} />
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
@@ -1039,7 +1147,23 @@ function Metric({ href, label, value }: { href: string; label: string; value: st
   );
 }
 
-function PainPointPanel({ pains, sources }: { pains: PainPoint[]; sources: Evidence[] }) {
+function PainPointPanel({
+  pains,
+  sources,
+  deepeningPainIndex,
+  progressIndex,
+  dismissedPainNotes,
+  onDigDeeperPain,
+  onDismissPainNote,
+}: {
+  pains: PainPoint[];
+  sources: Evidence[];
+  deepeningPainIndex: number | null;
+  progressIndex: number;
+  dismissedPainNotes: Set<string>;
+  onDigDeeperPain: (painIndex: number) => void;
+  onDismissPainNote: (key: string) => void;
+}) {
   const sourceMap = useMemo(() => new Map(sources.map((source) => [source.sourceId, source])), [sources]);
   return (
     <div id="pain-points" className="scroll-mt-24 rounded-lg border border-[var(--border)] bg-white p-5 shadow-sm">
@@ -1048,41 +1172,95 @@ function PainPointPanel({ pains, sources }: { pains: PainPoint[]; sources: Evide
         <span className="text-xs text-[var(--muted)]">ranked by severity, frequency, confidence</span>
       </div>
       <div className="space-y-4">
-        {pains.map((pain, index) => (
-          <details key={pain.title} className={`group rounded-lg border bg-[var(--surface-muted)] ${changeBorderClass(pain.changeStatus)}`}>
-            <summary className="cursor-pointer list-none p-4 [&::-webkit-details-marker]:hidden">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-xs font-semibold text-[var(--teal)]">#{index + 1} · {pain.affectedPersona}</div>
-                  <h4 className="mt-1 flex flex-wrap items-center gap-2 text-xl font-semibold leading-tight">
-                    <span>{pain.title}</span>
-                    <ChangeBadge status={pain.changeStatus} />
-                  </h4>
+        {pains.map((pain, index) => {
+          const isDeepening = deepeningPainIndex === index;
+          const noteKey = painNoteKey(pain, index);
+          const showNote = Boolean(pain.deepenNote && !dismissedPainNotes.has(noteKey));
+          return (
+            <details key={pain.title} className={`group rounded-lg border bg-[var(--surface-muted)] ${changeBorderClass(pain.changeStatus)}`}>
+              <summary className="cursor-pointer list-none p-4 [&::-webkit-details-marker]:hidden">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-semibold text-[var(--teal)]">#{index + 1} · {pain.affectedPersona}</div>
+                    <h4 className="mt-1 flex flex-wrap items-center gap-2 text-xl font-semibold leading-tight">
+                      <span>{pain.title}</span>
+                      <ChangeBadge status={pain.changeStatus} />
+                    </h4>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={deepeningPainIndex !== null}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onDigDeeperPain(index);
+                      }}
+                      className="inline-flex h-8 items-center justify-center rounded-lg border border-[var(--ink)] bg-white px-2.5 text-[11px] font-semibold text-[var(--ink)] transition hover:bg-[var(--ink)] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {isDeepening ? "Digging" : "Dig deeper"}
+                    </button>
+                    <ChevronDown size={18} className="mt-1 text-[var(--muted)] transition-transform group-open:rotate-180" />
+                  </div>
                 </div>
-                <ChevronDown size={18} className="mt-1 shrink-0 text-[var(--muted)] transition-transform group-open:rotate-180" />
+                <p className="mt-3 text-sm leading-6 text-[var(--muted)]">{pain.summary}</p>
+                {isDeepening ? <PainPointProgressBar progressIndex={progressIndex} /> : null}
+              </summary>
+              <div className="border-t border-[var(--border)] px-4 pb-4 pt-3">
+                {showNote ? (
+                  <div className="mb-3 flex items-start justify-between gap-3 rounded-lg border border-[var(--amber)] bg-[var(--amber-soft)] p-3 text-sm leading-6 text-[var(--ink)]">
+                    <span>{pain.deepenNote}</span>
+                    <button
+                      type="button"
+                      onClick={() => onDismissPainNote(noteKey)}
+                      className="shrink-0 rounded-lg bg-white px-2 py-1 text-xs font-semibold text-[var(--amber)] transition hover:text-[var(--ink)]"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                ) : null}
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <Bar label="Severity" value={pain.severity} color="bg-[var(--crimson)]" />
+                  <Bar label="Frequency" value={pain.frequency} color="bg-[var(--amber)]" />
+                  <Bar label="Confidence" value={pain.confidence} color="bg-[var(--teal)]" />
+                </div>
+                <QuoteProofs quotes={pain.quoteProofs} sourceMap={sourceMap} />
+                <div className="mt-4 rounded-lg bg-white p-3 text-sm">
+                  <span className="font-semibold">Implication:</span> <span className="text-[var(--muted)]">{pain.businessImplication}</span>
+                </div>
+                <div className="mt-3 rounded-lg bg-white p-3 text-sm">
+                  <span className="font-semibold">Validation:</span> <span className="text-[var(--muted)]">{pain.validationStep}</span>
+                </div>
+                <EvidenceSourceDisclosure ids={pain.evidenceIds} sourceMap={sourceMap} />
               </div>
-              <p className="mt-3 text-sm leading-6 text-[var(--muted)]">{pain.summary}</p>
-            </summary>
-            <div className="border-t border-[var(--border)] px-4 pb-4 pt-3">
-              <div className="grid gap-2 sm:grid-cols-3">
-                <Bar label="Severity" value={pain.severity} color="bg-[var(--crimson)]" />
-                <Bar label="Frequency" value={pain.frequency} color="bg-[var(--amber)]" />
-                <Bar label="Confidence" value={pain.confidence} color="bg-[var(--teal)]" />
-              </div>
-              <QuoteProofs quotes={pain.quoteProofs} sourceMap={sourceMap} />
-              <div className="mt-4 rounded-lg bg-white p-3 text-sm">
-                <span className="font-semibold">Implication:</span> <span className="text-[var(--muted)]">{pain.businessImplication}</span>
-              </div>
-              <div className="mt-3 rounded-lg bg-white p-3 text-sm">
-                <span className="font-semibold">Validation:</span> <span className="text-[var(--muted)]">{pain.validationStep}</span>
-              </div>
-              <EvidenceSourceDisclosure ids={pain.evidenceIds} sourceMap={sourceMap} />
-            </div>
-          </details>
-        ))}
+            </details>
+          );
+        })}
       </div>
     </div>
   );
+}
+
+function PainPointProgressBar({ progressIndex }: { progressIndex: number }) {
+  const cappedIndex = Math.min(progressIndex, progressSteps.length);
+  const stage = progressSteps[Math.min(cappedIndex, progressSteps.length - 1)];
+  const width = `${Math.max(8, (cappedIndex / progressSteps.length) * 100)}%`;
+
+  return (
+    <div className="mt-3 rounded-lg border border-[var(--amber)] bg-white p-2">
+      <div className="mb-1 flex items-center justify-between text-[11px] font-semibold text-[var(--amber)]">
+        <span>Digging deeper into this pain point</span>
+        <span>{stage?.label || "Starting"}</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-[var(--amber-soft)]">
+        <div className="h-full rounded-full bg-[var(--amber)] transition-all duration-500" style={{ width }} />
+      </div>
+    </div>
+  );
+}
+
+function painNoteKey(pain: PainPoint, index: number) {
+  return `${index}:${pain.title}:${pain.deepenNote || ""}`;
 }
 
 function EvidenceSourceDisclosure({ ids, sourceMap }: { ids: string[]; sourceMap: Map<string, Evidence> }) {

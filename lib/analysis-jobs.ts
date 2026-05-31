@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { runAnalysisForInput, runAnalysisForInputWithDeadline, runDeepenAnalysisForReport } from "@/lib/analysis";
+import { runAnalysisForInput, runAnalysisForInputWithDeadline, runDeepenAnalysisForReport, runDeepenPainPointForReport } from "@/lib/analysis";
 import { appendSupabaseAnalysisEvent, getSupabaseAnalysisJob, hasSupabaseAnalysisStore, saveSupabaseAnalysisJob } from "@/lib/supabase-analysis-store";
 import { SUPPORTED_SOURCE_OPTIONS } from "@/lib/types";
 import type { AnalysisMode, AnalyzeJobSnapshot, LiveQuotePreview, PainRadarReport, SearchDepth, SupportedSource, TimeWindow } from "@/lib/types";
@@ -33,6 +33,7 @@ function persistQueueMap() {
 
 type AnalysisJobInput = { url: string; analysisMode?: AnalysisMode; timeWindow?: TimeWindow; searchDepth?: SearchDepth; sources?: SupportedSource[] };
 type DeepenAnalysisJobInput = { report: PainRadarReport; sources?: SupportedSource[] };
+type PainPointDeepenAnalysisJobInput = { report: PainRadarReport; painIndex: number; sources?: SupportedSource[] };
 
 const DEFAULT_SUPPORTED_SOURCES = SUPPORTED_SOURCE_OPTIONS.map((source) => source.value);
 
@@ -65,6 +66,25 @@ export async function createDeepenAnalysisJob(input: DeepenAnalysisJobInput) {
 export async function startDeepenAnalysisJob(input: DeepenAnalysisJobInput) {
   const job = await createDeepenAnalysisJob(input);
   void runDeepenAnalysisJob(job.id, input);
+  return job;
+}
+
+export async function createPainPointDeepenAnalysisJob(input: PainPointDeepenAnalysisJobInput) {
+  const job = createInternalJob({
+    url: input.report.analyzedUrl,
+    analysisMode: input.report.analysisMode,
+    timeWindow: input.report.timeWindow,
+    searchDepth: "deep",
+    sources: input.sources,
+  });
+  jobMap().set(job.id, job);
+  await persistJob(job);
+  return publicJob(job);
+}
+
+export async function startPainPointDeepenAnalysisJob(input: PainPointDeepenAnalysisJobInput) {
+  const job = await createPainPointDeepenAnalysisJob(input);
+  void runPainPointDeepenAnalysisJob(job.id, input);
   return job;
 }
 
@@ -101,6 +121,21 @@ export async function runDeepenAnalysisJob(id: string, input: DeepenAnalysisJobI
   const job = internalJobFromSnapshot(existing);
   jobMap().set(job.id, job);
   await runDeepenJob(job, input);
+  return getAnalysisJob(id);
+}
+
+export async function runPainPointDeepenAnalysisJob(id: string, input: PainPointDeepenAnalysisJobInput) {
+  const existing = await getAnalysisJob(id);
+  if (!existing) {
+    throw new Error("Analysis job not found.");
+  }
+  if (existing.status === "completed" || existing.status === "failed" || existing.status === "cancelled") {
+    return existing;
+  }
+
+  const job = internalJobFromSnapshot(existing);
+  jobMap().set(job.id, job);
+  await runPainPointDeepenJob(job, input);
   return getAnalysisJob(id);
 }
 
@@ -181,6 +216,10 @@ async function runJob(job: InternalJob, input: AnalysisJobInput, deadlineMs?: nu
 
 async function runDeepenJob(job: InternalJob, input: DeepenAnalysisJobInput) {
   return runJobWithRunner(job, (setStage, setPreviewQuotes, signal) => runDeepenAnalysisForReport(input, setStage, setPreviewQuotes, signal));
+}
+
+async function runPainPointDeepenJob(job: InternalJob, input: PainPointDeepenAnalysisJobInput) {
+  return runJobWithRunner(job, (setStage, setPreviewQuotes, signal) => runDeepenPainPointForReport(input, setStage, setPreviewQuotes, signal));
 }
 
 async function runJobWithRunner(

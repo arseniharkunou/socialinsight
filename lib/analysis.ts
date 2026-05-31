@@ -3,11 +3,11 @@ import { extractEvidenceCards } from "@/lib/evidence";
 import { auditReportAgainstEvidence, buildEntityRelevanceContext, buildEvidenceClusters, expandMarketQueriesForEntity, filterAndRankSignalsForRelevance } from "@/lib/insight-quality";
 import type { EntityRelevanceContext } from "@/lib/insight-quality";
 import { buildMarketProfile, inferMarketCategoryFromText, marketDefaultsForCategory } from "@/lib/market";
-import { demoSynthesis, hasOpenAiCredentials, synthesizeDeepenedReport, synthesizeReport } from "@/lib/openai";
+import { demoSynthesis, hasOpenAiCredentials, synthesizeDeepenedPainPoint, synthesizeDeepenedReport, synthesizeReport } from "@/lib/openai";
 import { categoryFromExecutiveSummary, displayExecutiveSummary } from "@/lib/report-title";
 import { buildSentimentTrend } from "@/lib/sentiment";
 import { normalizeUrl } from "@/lib/utils";
-import type { AnalysisMode, AnalyzeProgressStage, Evidence, LiveQuotePreview, MarketProfile, MarketSignal, PainRadarReport, SearchDepth, SupportedSource, TimeWindow } from "@/lib/types";
+import type { AnalysisMode, AnalyzeProgressStage, Evidence, LiveQuotePreview, MarketProfile, MarketSignal, PainPoint, PainRadarReport, SearchDepth, SupportedSource, TimeWindow } from "@/lib/types";
 
 export type AnalysisTarget = {
   analysisMode: AnalysisMode;
@@ -180,6 +180,148 @@ export async function runDeepenAnalysisForReport(
     },
     sentimentTrend,
     ...synthesized,
+  } satisfies PainRadarReport;
+}
+
+export async function runDeepenPainPointForReport(
+  input: { report: PainRadarReport; painIndex: number; sources?: SupportedSource[] },
+  setStage: (stage: AnalyzeProgressStage) => void,
+  setPreviewQuotes?: (quotes: LiveQuotePreview[]) => void,
+  signal?: AbortSignal,
+) {
+  if (!hasOpenAiCredentials()) {
+    throw new Error("OpenAI API key is required to synthesize a deepened pain point.");
+  }
+
+  const previousReport = input.report;
+  const painPoint = previousReport.topPainPoints[input.painIndex];
+  if (!painPoint) {
+    throw new Error("Pain point not found.");
+  }
+
+  const searchDepth: SearchDepth = "deep";
+  const target = resolveAnalysisTarget(previousReport.analyzedUrl, previousReport.analysisMode);
+  let market = normalizeMarketIdentity(previousReport.market, target);
+  const websiteText = [
+    `Deepening one Social Insight pain point for ${target.modelTarget}.`,
+    previousReport.executiveSummary,
+    painPoint.title,
+    painPoint.summary,
+    painPoint.affectedPersona,
+    painPoint.quoteProofs.map((quote) => quote.quote).join(". "),
+  ].join(" ");
+  const relevanceContext = buildEntityRelevanceContext({
+    targetLabel: target.label,
+    websiteUrl: target.websiteUrl,
+    market,
+    websiteText,
+    analysisMode: target.analysisMode,
+  });
+
+  throwIfAborted(signal);
+  setStage("queries");
+  market = {
+    ...market,
+    searchQueries: buildPainPointDeepenQueries(previousReport, painPoint),
+  };
+
+  throwIfAborted(signal);
+  setStage("brightdata");
+  const runNonce = crypto.randomUUID();
+  const previewSignals = (signals: MarketSignal[]) => previewQuotesFromEvidence(filterAndRankSignalsForRelevance(signals, relevanceContext, { allowFallback: false }), market, target);
+  const newRawSignals = await searchPublicSignals(
+    market.searchQueries,
+    previousReport.timeWindow,
+    input.sources,
+    searchDepth,
+    (signals) => setPreviewQuotes?.(previewSignals(signals)),
+    runNonce,
+  );
+  setPreviewQuotes?.(previewSignals(newRawSignals));
+
+  throwIfAborted(signal);
+  setStage("evidence");
+  const previousSignals = previousReport.sources.map(evidenceToMarketSignal);
+  let combinedRawSignals = mergeSignals(previousSignals, newRawSignals);
+  combinedRawSignals = filterAndRankSignalsForRelevance(combinedRawSignals, relevanceContext);
+  combinedRawSignals = suppressCompanyOwnedSignals(combinedRawSignals, relevanceContext, searchDepth);
+  market = refineGenericMarketCategory(market, combinedRawSignals);
+  const generatedAt = new Date().toISOString();
+  const sentimentTrend = buildSentimentTrend(combinedRawSignals, previousReport.timeWindow, generatedAt);
+  const signals = extractEvidenceCards(combinedRawSignals, market, { limit: EVIDENCE_LIMITS[searchDepth], diversify: true, socialFirst: true });
+  const evidenceClusters = buildEvidenceClusters(signals);
+  const newSourceKeys = new Set(newRawSignals.map(normalizedSignalKey));
+  const newSourceIds = signals
+    .filter((source) => newSourceKeys.has(normalizedSignalKey(evidenceToMarketSignal(source))))
+    .map((source) => source.sourceId);
+
+  throwIfAborted(signal);
+  setStage("synthesis");
+  let focused;
+  try {
+    focused = await synthesizeDeepenedPainPoint({
+      previousReport,
+      painPoint,
+      painIndex: input.painIndex,
+      market,
+      signals,
+      evidenceClusters,
+      newSourceIds,
+      selectedSources: input.sources?.length ? input.sources : sourceSelectionFromEvidence(previousReport.sources),
+    });
+  } catch (error) {
+    throw new Error(openAiSynthesisFailureNote(error));
+  }
+
+  const nextPainPoints = [...previousReport.topPainPoints];
+  if (focused.changed) {
+    const candidateReport = {
+      executiveSummary: previousReport.executiveSummary,
+      whatsWorking: previousReport.whatsWorking,
+      topPainPoints: nextPainPoints.map((pain, index) => (index === input.painIndex ? focused.painPoint : pain)),
+      commonFrustrations: previousReport.commonFrustrations,
+      featureRequests: previousReport.featureRequests,
+      workarounds: previousReport.workarounds,
+      competitors: previousReport.competitors,
+      opportunities: previousReport.opportunities,
+      whatNotToTrustYet: previousReport.whatNotToTrustYet,
+      recommendedNextSteps: previousReport.recommendedNextSteps,
+    };
+    const validated = validateEvidenceIds(candidateReport, signals);
+    const audited = auditReportAgainstEvidence(validated, signals, evidenceClusters);
+    nextPainPoints[input.painIndex] = {
+      ...audited.topPainPoints[input.painIndex],
+      changeStatus: "updated",
+      deepenNote: undefined,
+    };
+  } else {
+    nextPainPoints[input.painIndex] = {
+      ...painPoint,
+      deepenNote: focused.note || "No substantial new information was found for this pain point.",
+    };
+  }
+
+  const sources = focused.changed ? signals : previousReport.sources;
+  const newSourceCount = focused.changed ? newSourceIds.length : 0;
+
+  return {
+    ...previousReport,
+    generatedAt,
+    searchDepth,
+    mode: hasBrightDataCredentials() || hasBrightDataMcpCredentials() ? "live" : previousReport.mode,
+    market,
+    sources,
+    sentimentTrend: focused.changed ? sentimentTrend : previousReport.sentimentTrend,
+    topPainPoints: nextPainPoints,
+    integrationNotes: {
+      ...previousReport.integrationNotes,
+      marketDiscovery: focused.changed
+        ? `Deepened pain point "${painPoint.title}" with ${newSourceCount.toLocaleString()} additional selected-source signals.`
+        : previousReport.integrationNotes.marketDiscovery,
+      synthesis: focused.changed
+        ? `OpenAI Responses API updated one pain point using ${sources.length.toLocaleString()} combined evidence snippets.`
+        : previousReport.integrationNotes.synthesis,
+    },
   } satisfies PainRadarReport;
 }
 
@@ -661,6 +803,55 @@ function buildDeepenQueries(report: PainRadarReport) {
     ]),
     ...caveatTopics.flatMap((topic) => topicQueries(product, category, topic, "evidence")),
   ]).slice(0, 180);
+}
+
+function buildPainPointDeepenQueries(report: PainRadarReport, pain: PainPoint) {
+  const product = report.market.productName;
+  const category = report.market.category;
+  const target = report.analyzedUrl;
+  const domain = domainFromAnalysisTarget(target);
+  const quoteTopics = pain.quoteProofs.map((quote) => compactTopic(quote.quote));
+  const sourceTopics = pain.evidenceIds
+    .map((id) => report.sources.find((source) => source.sourceId === id))
+    .filter((source): source is Evidence => Boolean(source))
+    .flatMap((source) => [compactTopic(source.title), compactTopic(source.snippet)]);
+  const topics = uniqueStrings([
+    pain.title,
+    pain.affectedPersona,
+    compactTopic(pain.summary),
+    compactTopic(pain.businessImplication),
+    compactTopic(pain.validationStep),
+    ...quoteTopics,
+    ...sourceTopics,
+  ]).filter((topic) => topic.length >= 4);
+
+  return uniqueStrings([
+    product,
+    category,
+    target,
+    ...(domain ? [domain] : []),
+    `"${product}" "${pain.title}"`,
+    `"${product}" "${pain.title}" complaints`,
+    `"${product}" "${pain.title}" discussion`,
+    `"${product}" "${pain.affectedPersona}" complaints`,
+    `"${product}" "${pain.affectedPersona}" workflow`,
+    `"${product}" reddit "${pain.title}"`,
+    `"${product}" linkedin "${pain.title}"`,
+    `"${product}" youtube comments "${pain.title}"`,
+    `"${category}" "${pain.title}" customer complaints`,
+    `"${category}" "${pain.affectedPersona}" user feedback`,
+    ...topics.flatMap((topic) => [
+      `"${product}" "${topic}"`,
+      `"${product}" "${topic}" feedback`,
+      `"${product}" "${topic}" complaints`,
+      `"${product}" "${topic}" comments`,
+      `"${category}" "${topic}" discussion`,
+      `"${topic}" "${product}" reddit`,
+      `"${topic}" "${product}" linkedin`,
+      `"${topic}" "${product}" youtube`,
+      `"${topic}" "${product}" alternatives`,
+    ]),
+  ]).slice(0, 90);
 }
 
 function topicQueries(product: string, category: string, topic: string, modifier: string) {

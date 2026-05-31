@@ -75,10 +75,17 @@ function assertSourceGuardrails() {
   assert.ok(!/pains\.slice\(\s*0\s*,/.test(painPanel), "PainPointPanel must not cap pain points");
   assert.ok(appPage.includes("/api/analyze/deepen"), "Dig deeper must call the deepen analysis route");
   assert.ok(appPage.includes("function DeepenProgressBar"), "Dig deeper must keep progress visible while the original report remains rendered");
+  assert.ok(appPage.includes("/api/analyze/deepen-pain"), "Pain point Dig deeper must call the focused pain deepen route");
+  assert.ok(appPage.includes("function PainPointProgressBar"), "Pain point Dig deeper must show progress inside the pain card");
+  assert.ok(appPage.includes("deepenNote"), "Pain point Dig deeper must support a dismissible no-new-info note");
 
   const deepenRoute = read("app/api/analyze/deepen/route.ts");
   assert.ok(deepenRoute.includes("runDeepenAnalysisJob"), "Deepen route must run a deepen job");
   assert.ok(deepenRoute.includes("sources: sources.length ? sources"), "Deepen route must preserve selected source filters");
+
+  const painDeepenRoute = read("app/api/analyze/deepen-pain/route.ts");
+  assert.ok(painDeepenRoute.includes("runPainPointDeepenAnalysisJob"), "Focused pain deepen route must run a pain point deepen job");
+  assert.ok(painDeepenRoute.includes("painIndex"), "Focused pain deepen route must target a specific pain point");
 
   const openai = read("lib/openai.ts");
   assert.ok(openai.includes("Return every materially distinct recurring pain point"), "OpenAI prompt must avoid fixed pain point caps");
