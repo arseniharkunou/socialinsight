@@ -68,15 +68,21 @@ export default function Home() {
   const [report, setReport] = useState<PainRadarReport | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [deepening, setDeepening] = useState(false);
+  const [deepenProgressIndex, setDeepenProgressIndex] = useState(0);
   const [progressIndex, setProgressIndex] = useState(0);
   const [previewQuotes, setPreviewQuotes] = useState<LiveQuotePreview[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const deepenAbortControllerRef = useRef<AbortController | null>(null);
   const previewQuotesShownAtRef = useRef<number | null>(null);
 
   function resetToStart() {
     const activeController = abortControllerRef.current;
+    const activeDeepenController = deepenAbortControllerRef.current;
     abortControllerRef.current = null;
+    deepenAbortControllerRef.current = null;
     activeController?.abort();
+    activeDeepenController?.abort();
     setUrl("");
     setAnalysisMode("company");
     setTimeWindow("1y");
@@ -85,6 +91,8 @@ export default function Home() {
     setReport(null);
     setError("");
     setLoading(false);
+    setDeepening(false);
+    setDeepenProgressIndex(0);
     setProgressIndex(0);
     setPreviewQuotes([]);
     previewQuotesShownAtRef.current = null;
@@ -167,9 +175,72 @@ export default function Home() {
     }
   }
 
+  async function runDigDeeper() {
+    if (!report || deepening) {
+      return;
+    }
+
+    deepenAbortControllerRef.current?.abort();
+    const controller = new AbortController();
+    deepenAbortControllerRef.current = controller;
+    setDeepening(true);
+    setDeepenProgressIndex(0);
+    setError("");
+
+    try {
+      const response = await fetch("/api/analyze/deepen", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ report, sources: selectedSources }),
+        cache: "no-store",
+        signal: controller.signal,
+      });
+
+      const startPayload = await readJobResponse(response);
+      if (!startPayload.ok) {
+        throw new Error(startPayload.error);
+      }
+
+      await pollAnalysisJob(startPayload.job.id, controller.signal, async (payload) => {
+        if (!payload.ok) {
+          throw new Error(payload.error);
+        }
+
+        const job = payload.job;
+        setDeepenProgressIndex(job.status === "completed" ? progressSteps.length : progressStageIndexes[job.stage]);
+
+        if (job.status === "completed" && job.report) {
+          setReport({
+            ...job.report,
+            analysisMode: job.report.analysisMode || job.analysisMode,
+            searchDepth: job.report.searchDepth || job.searchDepth,
+          });
+          setDeepenProgressIndex(progressSteps.length);
+          return true;
+        }
+
+        if (job.status === "failed" || job.status === "cancelled") {
+          throw new Error(job.error || "Deep research failed.");
+        }
+
+        return false;
+      });
+    } catch (reason) {
+      if (deepenAbortControllerRef.current === controller) {
+        setError(describeAnalysisError(reason));
+      }
+    } finally {
+      if (deepenAbortControllerRef.current === controller) {
+        deepenAbortControllerRef.current = null;
+      }
+      setDeepening(false);
+    }
+  }
+
   return (
     <main className="min-h-screen text-[var(--ink)]">
       <PageLogo onReset={resetToStart} />
+      {deepening ? <DeepenProgressBar progressIndex={deepenProgressIndex} /> : null}
       <section className="mx-auto min-h-screen w-full max-w-[1540px] px-4 pb-4 pt-20 sm:px-6 lg:px-8">
         <div className="overflow-hidden rounded-[18px] border border-[var(--border)] bg-[rgba(255,255,255,0.74)] shadow-[0_24px_90px_rgba(32,39,32,0.11)] backdrop-blur">
           <div className="grid min-h-[calc(100vh-112px)] grid-cols-1">
@@ -197,7 +268,7 @@ export default function Home() {
                   />
                 ) : (
                   <>
-                    <HeroState report={report} error={error} />
+                    <HeroState report={report} error={error} deepening={deepening} onDigDeeper={runDigDeeper} />
                     <ReportDashboard report={report} />
                   </>
                 )}
@@ -521,12 +592,30 @@ function ShareInsightsButton() {
   );
 }
 
+function DigDeeperButton({ deepening, onDigDeeper }: { deepening: boolean; onDigDeeper: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onDigDeeper}
+      disabled={deepening}
+      className="print:hidden inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-[var(--ink)] px-3 text-[11px] font-semibold text-white transition hover:bg-[var(--teal)] disabled:cursor-not-allowed disabled:opacity-60"
+    >
+      {deepening ? "Digging deeper" : "Dig deeper"}
+      <Search size={14} />
+    </button>
+  );
+}
+
 function HeroState({
   report,
   error,
+  deepening = false,
+  onDigDeeper,
 }: {
   report: PainRadarReport | null;
   error: string;
+  deepening?: boolean;
+  onDigDeeper?: () => void;
 }) {
   return (
     <section className="mb-5">
@@ -538,7 +627,12 @@ function HeroState({
               {report ? reportTitle(report) : "Discover the customer pain hiding in public conversations"}
             </h2>
           </div>
-          {report ? <ShareInsightsButton /> : null}
+          {report ? (
+            <div className="flex flex-wrap gap-2">
+              {onDigDeeper ? <DigDeeperButton deepening={deepening} onDigDeeper={onDigDeeper} /> : null}
+              <ShareInsightsButton />
+            </div>
+          ) : null}
         </div>
         {report ? <ReportMetricTabs report={report} /> : null}
         {error ? (
@@ -554,6 +648,23 @@ function HeroState({
         )}
       </div>
     </section>
+  );
+}
+
+function DeepenProgressBar({ progressIndex }: { progressIndex: number }) {
+  const cappedIndex = Math.min(progressIndex, progressSteps.length);
+  const stage = progressSteps[Math.min(cappedIndex, progressSteps.length - 1)];
+  const width = `${Math.max(8, (cappedIndex / progressSteps.length) * 100)}%`;
+
+  return (
+    <div className="fixed left-0 right-0 top-0 z-50 print:hidden">
+      <div className="h-1 bg-[rgba(183,121,31,0.18)]">
+        <div className="h-full rounded-r-full bg-[var(--amber)] transition-all duration-500" style={{ width }} />
+      </div>
+      <div className="pointer-events-none absolute right-3 top-3 rounded-lg border border-[var(--amber)] bg-[var(--amber-soft)] px-3 py-2 text-xs font-semibold text-[var(--ink)] shadow-sm">
+        Digging deeper: {stage?.label || "Starting"}
+      </div>
+    </div>
   );
 }
 
@@ -636,6 +747,7 @@ function ReportDashboard({ report }: { report: PainRadarReport }) {
             title: item.request,
             body: item.rationale,
             evidenceIds: item.evidenceIds,
+            changeStatus: item.changeStatus,
           }))}
         />
         <ClaimListPanel
@@ -647,6 +759,7 @@ function ReportDashboard({ report }: { report: PainRadarReport }) {
             title: item.workaround,
             body: item.tradeoff,
             evidenceIds: item.evidenceIds,
+            changeStatus: item.changeStatus,
           }))}
         />
       </div>
@@ -676,10 +789,13 @@ function WhatsWorkingPanel({ report }: { report: PainRadarReport }) {
       </div>
       <ul className="space-y-4">
         {items.slice(0, 5).map((item) => (
-          <li key={item.title} className="flex gap-3">
+          <li key={item.title} className={`flex gap-3 rounded-lg p-2 ${changeHighlightClass(item.changeStatus)}`}>
             <span className="mt-2 size-2 shrink-0 rounded-full bg-[var(--teal)]" aria-hidden="true" />
             <div className="min-w-0">
-              <div className="text-lg font-semibold leading-7">{item.title}</div>
+              <div className="flex flex-wrap items-center gap-2 text-lg font-semibold leading-7">
+                <span>{item.title}</span>
+                <ChangeBadge status={item.changeStatus} />
+              </div>
               <EvidenceSourceDisclosure ids={item.evidenceIds} sourceMap={sourceMap} />
             </div>
           </li>
@@ -780,6 +896,26 @@ function extractCommentCount(text: string) {
 
 function pluralize(word: string, count: number) {
   return count === 1 ? word : `${word}s`;
+}
+
+function changeHighlightClass(status?: "new" | "updated") {
+  return status ? "bg-[var(--amber-soft)] ring-1 ring-[var(--amber)]" : "";
+}
+
+function changeBorderClass(status?: "new" | "updated") {
+  return status ? "border-[var(--amber)] bg-[var(--amber-soft)]" : "border-[var(--border)]";
+}
+
+function ChangeBadge({ status }: { status?: "new" | "updated" }) {
+  if (!status) {
+    return null;
+  }
+
+  return (
+    <span className="inline-flex rounded-lg bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--amber)]">
+      {status === "new" ? "New" : "Updated"}
+    </span>
+  );
 }
 
 function SentimentTrendPanel({ report }: { report: PainRadarReport }) {
@@ -913,12 +1049,15 @@ function PainPointPanel({ pains, sources }: { pains: PainPoint[]; sources: Evide
       </div>
       <div className="space-y-4">
         {pains.map((pain, index) => (
-          <details key={pain.title} className="group rounded-lg border border-[var(--border)] bg-[var(--surface-muted)]">
+          <details key={pain.title} className={`group rounded-lg border bg-[var(--surface-muted)] ${changeBorderClass(pain.changeStatus)}`}>
             <summary className="cursor-pointer list-none p-4 [&::-webkit-details-marker]:hidden">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-xs font-semibold text-[var(--teal)]">#{index + 1} · {pain.affectedPersona}</div>
-                  <h4 className="mt-1 text-xl font-semibold leading-tight">{pain.title}</h4>
+                  <h4 className="mt-1 flex flex-wrap items-center gap-2 text-xl font-semibold leading-tight">
+                    <span>{pain.title}</span>
+                    <ChangeBadge status={pain.changeStatus} />
+                  </h4>
                 </div>
                 <ChevronDown size={18} className="mt-1 shrink-0 text-[var(--muted)] transition-transform group-open:rotate-180" />
               </div>
@@ -1047,13 +1186,16 @@ function OpportunityPanel({ report }: { report: PainRadarReport }) {
         <h3 className="text-lg font-semibold">Opportunities</h3>
         <div className="mt-4 space-y-3">
           {report.opportunities.map((opportunity) => (
-            <div key={opportunity.title} className="rounded-lg border border-[var(--border)] p-3">
+            <div key={opportunity.title} className={`rounded-lg border p-3 ${changeBorderClass(opportunity.changeStatus)}`}>
               <div className="flex items-start gap-3">
                 <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-[var(--teal-soft)] text-[var(--teal)]">
                   <Lightbulb size={16} />
                 </div>
                 <div>
-                  <h4 className="text-xl font-semibold leading-tight">{opportunity.title}</h4>
+                  <h4 className="flex flex-wrap items-center gap-2 text-xl font-semibold leading-tight">
+                    <span>{opportunity.title}</span>
+                    <ChangeBadge status={opportunity.changeStatus} />
+                  </h4>
                   <p className="mt-1 text-sm leading-5 text-[var(--muted)]">{opportunity.whyItMatters}</p>
                   <p className="mt-2 text-xs font-semibold text-[var(--amber)]">{opportunity.suggestedExperiment}</p>
                   <EvidenceSourceDisclosure ids={opportunity.evidenceIds} sourceMap={sourceMap} />
@@ -1067,10 +1209,13 @@ function OpportunityPanel({ report }: { report: PainRadarReport }) {
         <h3 className="text-lg font-semibold">Key market players</h3>
         <div className="mt-4 space-y-2">
           {report.competitors.map((competitor) => (
-            <div key={competitor.name} className="rounded-lg bg-[var(--surface-muted)] p-3">
+            <div key={competitor.name} className={`rounded-lg p-3 ${competitor.changeStatus ? "border border-[var(--amber)] bg-[var(--amber-soft)]" : "bg-[var(--surface-muted)]"}`}>
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <div className="text-lg font-semibold leading-tight">{competitor.name}</div>
+                  <div className="flex flex-wrap items-center gap-2 text-lg font-semibold leading-tight">
+                    <span>{competitor.name}</span>
+                    <ChangeBadge status={competitor.changeStatus} />
+                  </div>
                   <div className="mt-1 text-sm leading-6 text-[var(--muted)]">{competitor.context}</div>
                 </div>
                 <span className={`rounded-lg px-2 py-1 text-xs font-semibold ${sentimentTone(competitor.sentiment)}`}>{competitor.sentiment}</span>
@@ -1107,7 +1252,7 @@ function ClaimListPanel({
   id: string;
   title: string;
   icon: typeof Lightbulb;
-  items: Array<{ title: string; body: string; evidenceIds: string[] }>;
+  items: Array<{ title: string; body: string; evidenceIds: string[]; changeStatus?: "new" | "updated" }>;
   sources: Evidence[];
 }) {
   const sourceMap = useMemo(() => new Map(sources.map((source) => [source.sourceId, source])), [sources]);
@@ -1122,8 +1267,11 @@ function ClaimListPanel({
       <div className="space-y-3">
         {items.length ? (
           items.map((item) => (
-            <div key={item.title} className="rounded-lg border border-[var(--border)] p-3">
-              <div className="text-sm font-semibold">{item.title}</div>
+            <div key={item.title} className={`rounded-lg border p-3 ${changeBorderClass(item.changeStatus)}`}>
+              <div className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+                <span>{item.title}</span>
+                <ChangeBadge status={item.changeStatus} />
+              </div>
               <p className="mt-1 text-sm leading-6 text-[var(--muted)]">{item.body}</p>
               <EvidenceSourceDisclosure ids={item.evidenceIds} sourceMap={sourceMap} />
             </div>

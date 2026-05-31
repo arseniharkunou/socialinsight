@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { runAnalysisForInput, runAnalysisForInputWithDeadline } from "@/lib/analysis";
+import { runAnalysisForInput, runAnalysisForInputWithDeadline, runDeepenAnalysisForReport } from "@/lib/analysis";
 import { appendSupabaseAnalysisEvent, getSupabaseAnalysisJob, hasSupabaseAnalysisStore, saveSupabaseAnalysisJob } from "@/lib/supabase-analysis-store";
 import { SUPPORTED_SOURCE_OPTIONS } from "@/lib/types";
-import type { AnalysisMode, AnalyzeJobSnapshot, LiveQuotePreview, SearchDepth, SupportedSource, TimeWindow } from "@/lib/types";
+import type { AnalysisMode, AnalyzeJobSnapshot, LiveQuotePreview, PainRadarReport, SearchDepth, SupportedSource, TimeWindow } from "@/lib/types";
 
 type InternalJob = AnalyzeJobSnapshot & {
   abortController: AbortController;
@@ -32,6 +32,7 @@ function persistQueueMap() {
 }
 
 type AnalysisJobInput = { url: string; analysisMode?: AnalysisMode; timeWindow?: TimeWindow; searchDepth?: SearchDepth; sources?: SupportedSource[] };
+type DeepenAnalysisJobInput = { report: PainRadarReport; sources?: SupportedSource[] };
 
 const DEFAULT_SUPPORTED_SOURCES = SUPPORTED_SOURCE_OPTIONS.map((source) => source.value);
 
@@ -45,6 +46,25 @@ export async function createAnalysisJob(input: AnalysisJobInput) {
 export async function startAnalysisJob(input: AnalysisJobInput) {
   const job = await createAnalysisJob(input);
   void runAnalysisJob(job.id, input);
+  return job;
+}
+
+export async function createDeepenAnalysisJob(input: DeepenAnalysisJobInput) {
+  const job = createInternalJob({
+    url: input.report.analyzedUrl,
+    analysisMode: input.report.analysisMode,
+    timeWindow: input.report.timeWindow,
+    searchDepth: "deep",
+    sources: input.sources,
+  });
+  jobMap().set(job.id, job);
+  await persistJob(job);
+  return publicJob(job);
+}
+
+export async function startDeepenAnalysisJob(input: DeepenAnalysisJobInput) {
+  const job = await createDeepenAnalysisJob(input);
+  void runDeepenAnalysisJob(job.id, input);
   return job;
 }
 
@@ -66,6 +86,21 @@ export async function runAnalysisJob(id: string, input: AnalysisJobInput, deadli
   const job = internalJobFromSnapshot(existing);
   jobMap().set(job.id, job);
   await runJob(job, input, deadlineMs);
+  return getAnalysisJob(id);
+}
+
+export async function runDeepenAnalysisJob(id: string, input: DeepenAnalysisJobInput) {
+  const existing = await getAnalysisJob(id);
+  if (!existing) {
+    throw new Error("Analysis job not found.");
+  }
+  if (existing.status === "completed" || existing.status === "failed" || existing.status === "cancelled") {
+    return existing;
+  }
+
+  const job = internalJobFromSnapshot(existing);
+  jobMap().set(job.id, job);
+  await runDeepenJob(job, input);
   return getAnalysisJob(id);
 }
 
@@ -137,6 +172,25 @@ export async function cancelAnalysisJob(id: string) {
 }
 
 async function runJob(job: InternalJob, input: AnalysisJobInput, deadlineMs?: number) {
+  return runJobWithRunner(job, (setStage, setPreviewQuotes, signal) => (
+    deadlineMs
+      ? runAnalysisForInputWithDeadline(input, setStage, setPreviewQuotes, signal, deadlineMs)
+      : runAnalysisForInput(input, setStage, setPreviewQuotes, signal)
+  ));
+}
+
+async function runDeepenJob(job: InternalJob, input: DeepenAnalysisJobInput) {
+  return runJobWithRunner(job, (setStage, setPreviewQuotes, signal) => runDeepenAnalysisForReport(input, setStage, setPreviewQuotes, signal));
+}
+
+async function runJobWithRunner(
+  job: InternalJob,
+  runner: (
+    setStage: (stage: AnalyzeJobSnapshot["stage"]) => void,
+    setPreviewQuotes: (previewQuotes: LiveQuotePreview[]) => void,
+    signal: AbortSignal,
+  ) => Promise<PainRadarReport>,
+) {
   await updateJob(job, { status: "running", stage: "website" });
   let acceptingAnalysisUpdates = true;
   const updateAnalysisStage = (stage: AnalyzeJobSnapshot["stage"]) => {
@@ -150,20 +204,7 @@ async function runJob(job: InternalJob, input: AnalysisJobInput, deadlineMs?: nu
     }
   };
   try {
-    const report = deadlineMs
-      ? await runAnalysisForInputWithDeadline(
-        input,
-        updateAnalysisStage,
-        updateAnalysisQuotes,
-        job.abortController.signal,
-        deadlineMs,
-      )
-      : await runAnalysisForInput(
-        input,
-        updateAnalysisStage,
-        updateAnalysisQuotes,
-        job.abortController.signal,
-      );
+    const report = await runner(updateAnalysisStage, updateAnalysisQuotes, job.abortController.signal);
     acceptingAnalysisUpdates = false;
 
     const latestJob = hasSupabaseAnalysisStore() ? await getSupabaseAnalysisJob(job.id) : null;

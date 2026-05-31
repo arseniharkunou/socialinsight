@@ -3,7 +3,7 @@ import { extractEvidenceCards } from "@/lib/evidence";
 import { auditReportAgainstEvidence, buildEntityRelevanceContext, buildEvidenceClusters, expandMarketQueriesForEntity, filterAndRankSignalsForRelevance } from "@/lib/insight-quality";
 import type { EntityRelevanceContext } from "@/lib/insight-quality";
 import { buildMarketProfile, inferMarketCategoryFromText, marketDefaultsForCategory } from "@/lib/market";
-import { demoSynthesis, hasOpenAiCredentials, synthesizeReport } from "@/lib/openai";
+import { demoSynthesis, hasOpenAiCredentials, synthesizeDeepenedReport, synthesizeReport } from "@/lib/openai";
 import { categoryFromExecutiveSummary, displayExecutiveSummary } from "@/lib/report-title";
 import { buildSentimentTrend } from "@/lib/sentiment";
 import { normalizeUrl } from "@/lib/utils";
@@ -72,6 +72,115 @@ export async function runAnalysisForInputWithDeadline(
       clearTimeout(timeoutId);
     }
   }
+}
+
+export async function runDeepenAnalysisForReport(
+  input: { report: PainRadarReport; sources?: SupportedSource[] },
+  setStage: (stage: AnalyzeProgressStage) => void,
+  setPreviewQuotes?: (quotes: LiveQuotePreview[]) => void,
+  signal?: AbortSignal,
+) {
+  if (!hasOpenAiCredentials()) {
+    throw new Error("OpenAI API key is required to synthesize a deepened report.");
+  }
+
+  const previousReport = input.report;
+  const searchDepth: SearchDepth = "deep";
+  const target = resolveAnalysisTarget(previousReport.analyzedUrl, previousReport.analysisMode);
+  let market = normalizeMarketIdentity(previousReport.market, target);
+  const websiteText = [
+    `Deepening an existing Social Insight report for ${target.modelTarget}.`,
+    previousReport.executiveSummary,
+    previousReport.topPainPoints.map((pain) => pain.title).join(". "),
+    previousReport.opportunities.map((opportunity) => opportunity.title).join(". "),
+  ].join(" ");
+  const relevanceContext = buildEntityRelevanceContext({
+    targetLabel: target.label,
+    websiteUrl: target.websiteUrl,
+    market,
+    websiteText,
+    analysisMode: target.analysisMode,
+  });
+
+  throwIfAborted(signal);
+  setStage("queries");
+  market = {
+    ...market,
+    searchQueries: buildDeepenQueries(previousReport),
+  };
+
+  throwIfAborted(signal);
+  setStage("brightdata");
+  const runNonce = crypto.randomUUID();
+  const previewSignals = (signals: MarketSignal[]) => previewQuotesFromEvidence(filterAndRankSignalsForRelevance(signals, relevanceContext, { allowFallback: false }), market, target);
+  const newRawSignals = await searchPublicSignals(
+    market.searchQueries,
+    previousReport.timeWindow,
+    input.sources,
+    searchDepth,
+    (signals) => setPreviewQuotes?.(previewSignals(signals)),
+    runNonce,
+  );
+  setPreviewQuotes?.(previewSignals(newRawSignals));
+
+  throwIfAborted(signal);
+  setStage("evidence");
+  const previousSignals = previousReport.sources.map(evidenceToMarketSignal);
+  let combinedRawSignals = mergeSignals(previousSignals, newRawSignals);
+  combinedRawSignals = filterAndRankSignalsForRelevance(combinedRawSignals, relevanceContext);
+  combinedRawSignals = suppressCompanyOwnedSignals(combinedRawSignals, relevanceContext, searchDepth);
+  market = refineGenericMarketCategory(market, combinedRawSignals);
+  const generatedAt = new Date().toISOString();
+  const sentimentTrend = buildSentimentTrend(combinedRawSignals, previousReport.timeWindow, generatedAt);
+  const signals = extractEvidenceCards(combinedRawSignals, market, { limit: EVIDENCE_LIMITS[searchDepth], diversify: true, socialFirst: true });
+  const evidenceClusters = buildEvidenceClusters(signals);
+  const newSourceKeys = new Set(newRawSignals.map(normalizedSignalKey));
+  const newSourceIds = signals
+    .filter((source) => newSourceKeys.has(normalizedSignalKey(evidenceToMarketSignal(source))))
+    .map((source) => source.sourceId);
+
+  throwIfAborted(signal);
+  setStage("synthesis");
+  let synthesized;
+  try {
+    synthesized = await synthesizeDeepenedReport({
+      previousReport,
+      market,
+      signals,
+      evidenceClusters,
+      newSourceIds,
+      selectedSources: input.sources?.length ? input.sources : previousReport.integrationNotes.marketDiscovery ? sourceSelectionFromEvidence(previousReport.sources) : [],
+    });
+  } catch (error) {
+    throw new Error(openAiSynthesisFailureNote(error));
+  }
+
+  synthesized = validateEvidenceIds(synthesized, signals);
+  synthesized = auditReportAgainstEvidence(synthesized, signals, evidenceClusters);
+  synthesized = markReportChanges(synthesized, previousReport, new Set(newSourceIds));
+  synthesized = {
+    ...synthesized,
+    executiveSummary: displayExecutiveSummary(synthesized.executiveSummary),
+  };
+  market = reconcileMarketCategoryFromSummary(market, synthesized.executiveSummary);
+
+  return {
+    analyzedUrl: previousReport.analyzedUrl,
+    generatedAt,
+    analysisMode: previousReport.analysisMode,
+    timeWindow: previousReport.timeWindow,
+    searchDepth,
+    mode: hasBrightDataCredentials() || hasBrightDataMcpCredentials() ? "live" : "demo",
+    market,
+    sources: signals,
+    integrationNotes: {
+      websiteRetrieval: previousReport.integrationNotes.websiteRetrieval,
+      marketDiscovery: `Deepened previous report with ${newSourceIds.length.toLocaleString()} additional selected-source signals using refined queries from existing pain points, opportunities, competitors, and caveats.`,
+      synthesis: `OpenAI Responses API deepened the existing report using ${signals.length.toLocaleString()} combined evidence snippets.`,
+    },
+    sentimentTrend,
+    ...synthesized,
+  } satisfies PainRadarReport;
 }
 
 export function buildFallbackReportForInput(
@@ -506,6 +615,79 @@ function buildSecondPassQueries(market: MarketProfile, target: AnalysisTarget) {
   ]).slice(0, 24);
 }
 
+function buildDeepenQueries(report: PainRadarReport) {
+  const product = report.market.productName;
+  const category = report.market.category;
+  const target = report.analyzedUrl;
+  const domain = domainFromAnalysisTarget(target);
+  const painTopics = report.topPainPoints.flatMap((pain) => [
+    pain.title,
+    pain.affectedPersona,
+    compactTopic(pain.summary),
+  ]);
+  const opportunityTopics = report.opportunities.flatMap((opportunity) => [
+    opportunity.title,
+    compactTopic(opportunity.whyItMatters),
+  ]);
+  const requestTopics = report.featureRequests.map((request) => request.request);
+  const workaroundTopics = report.workarounds.map((workaround) => workaround.workaround);
+  const competitorTopics = report.competitors.map((competitor) => competitor.name);
+  const caveatTopics = report.whatNotToTrustYet.map(compactTopic);
+
+  return uniqueStrings([
+    ...report.market.searchQueries,
+    product,
+    category,
+    target,
+    ...(domain ? [domain] : []),
+    `"${product}" reddit discussion`,
+    `"${product}" linkedin discussion`,
+    `"${product}" x.com comments`,
+    `"${product}" youtube comments`,
+    `"${product}" customer complaints`,
+    `"${product}" customer success`,
+    `"${product}" alternatives`,
+    `"${category}" customer pain points`,
+    `"${category}" competitor comparison`,
+    ...painTopics.flatMap((topic) => topicQueries(product, category, topic, "complaints")),
+    ...opportunityTopics.flatMap((topic) => topicQueries(product, category, topic, "feedback")),
+    ...requestTopics.flatMap((topic) => topicQueries(product, category, topic, "feature request")),
+    ...workaroundTopics.flatMap((topic) => topicQueries(product, category, topic, "workaround")),
+    ...competitorTopics.flatMap((competitor) => [
+      `"${product}" "${competitor}" comparison`,
+      `"${product}" "${competitor}" alternative`,
+      `"${competitor}" customer complaints`,
+      `"${competitor}" user feedback`,
+    ]),
+    ...caveatTopics.flatMap((topic) => topicQueries(product, category, topic, "evidence")),
+  ]).slice(0, 180);
+}
+
+function topicQueries(product: string, category: string, topic: string, modifier: string) {
+  const cleaned = compactTopic(topic);
+  if (!cleaned) {
+    return [];
+  }
+  return [
+    `"${product}" "${cleaned}"`,
+    `"${product}" "${cleaned}" ${modifier}`,
+    `"${category}" "${cleaned}" ${modifier}`,
+    `"${cleaned}" "${product}" reddit`,
+    `"${cleaned}" "${product}" linkedin`,
+  ];
+}
+
+function compactTopic(value: string) {
+  return value
+    .replace(/["“”]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter((word) => word.length > 2)
+    .slice(0, 8)
+    .join(" ");
+}
+
 function domainFromAnalysisTarget(target: string) {
   try {
     return new URL(target).hostname.replace(/^www\./, "");
@@ -539,6 +721,25 @@ function normalizedSignalKey(signal: MarketSignal) {
   } catch {
     return signal.sourceId;
   }
+}
+
+function evidenceToMarketSignal(source: Evidence): MarketSignal {
+  return {
+    ...source,
+    domain: safeHostname(source.url) || "unknown",
+  };
+}
+
+function sourceSelectionFromEvidence(sources: Evidence[]) {
+  const selected = new Set<SupportedSource>();
+  for (const source of sources) {
+    if (source.sourceType.startsWith("reddit") || /reddit\.com/i.test(source.url)) selected.add("reddit");
+    else if (source.sourceType.startsWith("x_") || /(?:x|twitter)\.com/i.test(source.url)) selected.add("x");
+    else if (source.sourceType === "linkedin_post" || /linkedin\.com/i.test(source.url)) selected.add("linkedin");
+    else if (source.sourceType.startsWith("youtube") || /youtu(?:be\.com|\.be)/i.test(source.url)) selected.add("youtube");
+    else selected.add("web");
+  }
+  return selected.size ? Array.from(selected) : ["web", "reddit", "x", "linkedin", "youtube"];
 }
 
 function uniqueStrings(values: string[]) {
@@ -690,6 +891,68 @@ function validateEvidenceIds<
     competitors: report.competitors.map((item) => ({ ...item, evidenceIds: clean(item.evidenceIds) })),
     opportunities: report.opportunities.map((item) => ({ ...item, evidenceIds: clean(item.evidenceIds) })),
   };
+}
+
+function markReportChanges<
+  T extends Omit<PainRadarReport, "analyzedUrl" | "generatedAt" | "analysisMode" | "timeWindow" | "searchDepth" | "mode" | "market" | "sources" | "integrationNotes">,
+>(report: T, previousReport: PainRadarReport, newSourceIds: Set<string>): T {
+  return {
+    ...report,
+    whatsWorking: markChangedItems(report.whatsWorking, previousReport.whatsWorking, (item) => item.title, (item) => item.evidenceIds, newSourceIds),
+    topPainPoints: markChangedItems(report.topPainPoints, previousReport.topPainPoints, (item) => item.title, (item) => item.evidenceIds, newSourceIds),
+    featureRequests: markChangedItems(report.featureRequests, previousReport.featureRequests, (item) => item.request, (item) => item.evidenceIds, newSourceIds),
+    workarounds: markChangedItems(report.workarounds, previousReport.workarounds, (item) => item.workaround, (item) => item.evidenceIds, newSourceIds),
+    competitors: markChangedItems(report.competitors, previousReport.competitors, (item) => item.name, (item) => item.evidenceIds, newSourceIds),
+    opportunities: markChangedItems(report.opportunities, previousReport.opportunities, (item) => item.title, (item) => item.evidenceIds, newSourceIds),
+  };
+}
+
+function markChangedItems<T extends { changeStatus?: "new" | "updated" }>(
+  nextItems: T[],
+  previousItems: T[],
+  keyFor: (item: T) => string,
+  evidenceIdsFor: (item: T) => string[],
+  newSourceIds: Set<string>,
+) {
+  const previousKeys = previousItems.map((item) => normalizedFindingKey(keyFor(item))).filter(Boolean);
+  return nextItems.map((item) => {
+    const key = normalizedFindingKey(keyFor(item));
+    const citesNewSource = evidenceIdsFor(item).some((id) => newSourceIds.has(id));
+    if (!key || !hasMatchingPreviousFinding(key, previousKeys)) {
+      return { ...item, changeStatus: "new" as const };
+    }
+    if (citesNewSource) {
+      return { ...item, changeStatus: "updated" as const };
+    }
+    const { changeStatus: _changeStatus, ...rest } = item;
+    return rest as T;
+  });
+}
+
+function normalizedFindingKey(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function hasMatchingPreviousFinding(key: string, previousKeys: string[]) {
+  if (previousKeys.includes(key)) {
+    return true;
+  }
+  const tokens = findingTokens(key);
+  if (tokens.size === 0) {
+    return false;
+  }
+  return previousKeys.some((previousKey) => {
+    const previousTokens = findingTokens(previousKey);
+    if (previousTokens.size === 0) {
+      return false;
+    }
+    const overlap = Array.from(tokens).filter((token) => previousTokens.has(token)).length;
+    return overlap / Math.max(tokens.size, previousTokens.size) >= 0.62;
+  });
+}
+
+function findingTokens(key: string) {
+  return new Set(key.split(" ").filter((token) => token.length >= 4));
 }
 
 function previewQuotesFromEvidence(sources: Evidence[], market: MarketProfile, target: AnalysisTarget): LiveQuotePreview[] {

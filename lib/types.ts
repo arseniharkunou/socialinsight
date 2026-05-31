@@ -82,18 +82,21 @@ export type PainPoint = {
   }>;
   businessImplication: string;
   validationStep: string;
+  changeStatus?: "new" | "updated";
 };
 
 export type FeatureRequest = {
   request: string;
   rationale: string;
   evidenceIds: string[];
+  changeStatus?: "new" | "updated";
 };
 
 export type Workaround = {
   workaround: string;
   tradeoff: string;
   evidenceIds: string[];
+  changeStatus?: "new" | "updated";
 };
 
 export type CompetitorMention = {
@@ -101,6 +104,7 @@ export type CompetitorMention = {
   context: string;
   sentiment: "positive" | "negative" | "mixed" | "neutral";
   evidenceIds: string[];
+  changeStatus?: "new" | "updated";
 };
 
 export type ProductOpportunity = {
@@ -109,11 +113,13 @@ export type ProductOpportunity = {
   suggestedExperiment: string;
   confidence: number;
   evidenceIds: string[];
+  changeStatus?: "new" | "updated";
 };
 
 export type WorkingTheme = {
   title: string;
   evidenceIds: string[];
+  changeStatus?: "new" | "updated";
 };
 
 export type PainRadarReport = {

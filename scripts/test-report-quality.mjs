@@ -62,7 +62,7 @@ function assertGroundedReport(report) {
 
 function assertSourceGuardrails() {
   const analysis = read("lib/analysis.ts");
-  const openAiCatchIndex = analysis.indexOf("openAiSynthesisFailureNote(error)");
+  const openAiCatchIndex = analysis.indexOf("const note = openAiSynthesisFailureNote(error)");
   assert.notEqual(openAiCatchIndex, -1, "OpenAI synthesis errors must use the explicit failure note");
   const catchBlock = analysis.slice(openAiCatchIndex, analysis.indexOf("synthesized = validateEvidenceIds", openAiCatchIndex));
   assert.ok(catchBlock.includes("throw new Error(note)"), "live OpenAI synthesis failures must throw instead of returning demo content");
@@ -73,6 +73,12 @@ function assertSourceGuardrails() {
   const painPanel = appPage.slice(painPanelIndex, appPage.indexOf("function EvidenceSourceDisclosure", painPanelIndex));
   assert.ok(painPanel.includes("pains.map("), "PainPointPanel must render all pain points");
   assert.ok(!/pains\.slice\(\s*0\s*,/.test(painPanel), "PainPointPanel must not cap pain points");
+  assert.ok(appPage.includes("/api/analyze/deepen"), "Dig deeper must call the deepen analysis route");
+  assert.ok(appPage.includes("function DeepenProgressBar"), "Dig deeper must keep progress visible while the original report remains rendered");
+
+  const deepenRoute = read("app/api/analyze/deepen/route.ts");
+  assert.ok(deepenRoute.includes("runDeepenAnalysisJob"), "Deepen route must run a deepen job");
+  assert.ok(deepenRoute.includes("sources: sources.length ? sources"), "Deepen route must preserve selected source filters");
 
   const openai = read("lib/openai.ts");
   assert.ok(openai.includes("Return every materially distinct recurring pain point"), "OpenAI prompt must avoid fixed pain point caps");

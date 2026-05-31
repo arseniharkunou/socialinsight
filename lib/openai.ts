@@ -254,6 +254,76 @@ Produce concise but decision-ready JSON.`,
   return normalizeReportScores(report);
 }
 
+export async function synthesizeDeepenedReport(input: {
+  previousReport: PainRadarReport;
+  market: MarketProfile;
+  signals: MarketSignal[];
+  evidenceClusters?: EvidenceCluster[];
+  newSourceIds: string[];
+  selectedSources: string[];
+}): Promise<ReportSynthesis> {
+  if (!hasOpenAiCredentials()) {
+    throw new Error("OpenAI API key is required to synthesize a deepened report.");
+  }
+
+  const signalLimit = 900;
+  const report = await structuredResponse<ReportSynthesis>(
+    "social_insight_deepened_report",
+    reportSchema,
+    `You are Social Insight, a rigorous product intelligence analyst.
+
+Goal: deepen an existing report by combining the previous findings with a new research pass. Update the report based on the combined evidence, not by producing a separate report.
+
+Rules:
+- Prioritize public customer and market commentary over company-authored content.
+- Use only the selected source families for the new pass: ${input.selectedSources.join(", ")}.
+- Treat source IDs in newSourceIds as evidence found by the deeper pass. Use them to add or strengthen findings when relevant.
+- Preserve previous findings only when still supported by the combined evidence.
+- Add every materially distinct new pain point, opportunity, request, workaround, competitor mention, or positive theme that is supported by evidence.
+- Do not cap pain points at 5. Return all supported recurring pains and rank them by severity, frequency, and confidence.
+- Every pain point, request, workaround, competitor, and opportunity must cite one or more evidenceIds from the provided sources.
+- Every pain point must include 1-3 quoteProofs using only words present in the cited source title/snippet text.
+- Be specific. Avoid generic claims like "proof of value is hard to evaluate" unless the cited public evidence directly says that in target-specific terms.
+- If the deeper pass does not materially change a section, keep it concise and do not invent filler.
+
+Previous report:
+${JSON.stringify(compactPreviousReport(input.previousReport), null, 2)}
+
+New source IDs:
+${JSON.stringify(input.newSourceIds, null, 2)}
+
+Market profile:
+${JSON.stringify(input.market, null, 2)}
+
+Evidence clusters:
+${JSON.stringify(input.evidenceClusters || [], null, 2)}
+
+Combined public signals:
+${JSON.stringify(input.signals.slice(0, signalLimit), null, 2)}
+
+Produce concise but decision-ready JSON.`,
+  );
+  return normalizeReportScores(report);
+}
+
+function compactPreviousReport(report: PainRadarReport) {
+  return {
+    analyzedUrl: report.analyzedUrl,
+    analysisMode: report.analysisMode,
+    timeWindow: report.timeWindow,
+    market: report.market,
+    executiveSummary: report.executiveSummary,
+    whatsWorking: report.whatsWorking,
+    topPainPoints: report.topPainPoints,
+    featureRequests: report.featureRequests,
+    workarounds: report.workarounds,
+    competitors: report.competitors,
+    opportunities: report.opportunities,
+    whatNotToTrustYet: report.whatNotToTrustYet,
+    sourceCount: report.sources.length,
+  };
+}
+
 export function demoSynthesis(
   market: MarketProfile,
   signals: MarketSignal[],
