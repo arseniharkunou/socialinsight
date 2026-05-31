@@ -73,6 +73,24 @@ export default function Home() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const previewQuotesShownAtRef = useRef<number | null>(null);
 
+  function resetToStart() {
+    const activeController = abortControllerRef.current;
+    abortControllerRef.current = null;
+    activeController?.abort();
+    setUrl("");
+    setAnalysisMode("company");
+    setTimeWindow("1y");
+    setSearchDepth("fast");
+    setSelectedSources(defaultSupportedSources);
+    setReport(null);
+    setError("");
+    setLoading(false);
+    setProgressIndex(0);
+    setPreviewQuotes([]);
+    previewQuotesShownAtRef.current = null;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     void runAnalysis();
@@ -138,7 +156,9 @@ export default function Home() {
         return false;
       });
     } catch (reason) {
-      setError(describeAnalysisError(reason));
+      if (abortControllerRef.current === controller) {
+        setError(describeAnalysisError(reason));
+      }
     } finally {
       if (abortControllerRef.current === controller) {
         abortControllerRef.current = null;
@@ -149,7 +169,7 @@ export default function Home() {
 
   return (
     <main className="min-h-screen text-[var(--ink)]">
-      <PageLogo />
+      <PageLogo onReset={resetToStart} />
       <section className="mx-auto min-h-screen w-full max-w-[1540px] px-4 pb-4 pt-20 sm:px-6 lg:px-8">
         <div className="overflow-hidden rounded-[18px] border border-[var(--border)] bg-[rgba(255,255,255,0.74)] shadow-[0_24px_90px_rgba(32,39,32,0.11)] backdrop-blur">
           <div className="grid min-h-[calc(100vh-112px)] grid-cols-1">
@@ -286,10 +306,11 @@ function describeAnalysisError(reason: unknown) {
   return "Analysis failed. Check the dev server console for details.";
 }
 
-function PageLogo() {
+function PageLogo({ onReset }: { onReset: () => void }) {
   return (
     <Link
       href="/"
+      onClick={onReset}
       aria-label="Go to starting point"
       className="absolute left-4 top-4 z-10 flex items-center gap-3 rounded-lg outline-none transition focus-visible:ring-4 focus-visible:ring-[rgba(var(--primary-rgb),0.16)] sm:left-6 lg:left-8"
     >
