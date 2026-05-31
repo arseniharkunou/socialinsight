@@ -674,14 +674,14 @@ function WhatsWorkingPanel({ report }: { report: PainRadarReport }) {
         </div>
         <h3 className="text-lg font-semibold">What&apos;s working</h3>
       </div>
-      <ul className="grid gap-3 md:grid-cols-2">
+      <ul className="space-y-4">
         {items.slice(0, 5).map((item) => (
-          <li key={item.title} className="rounded-lg border border-[var(--border)] bg-[var(--surface-muted)] p-3">
-            <div className="text-sm font-semibold leading-6">{item.title}</div>
-            <div className="mt-1 text-xs font-semibold text-[var(--teal)]">
-              Repeated in {item.evidenceIds.length} {pluralize("source", item.evidenceIds.length)}
+          <li key={item.title} className="flex gap-3">
+            <span className="mt-2 size-2 shrink-0 rounded-full bg-[var(--teal)]" aria-hidden="true" />
+            <div className="min-w-0">
+              <div className="text-lg font-semibold leading-7">{item.title}</div>
+              <EvidenceSourceDisclosure ids={item.evidenceIds} sourceMap={sourceMap} />
             </div>
-            <EvidenceSourceDisclosure ids={item.evidenceIds} sourceMap={sourceMap} />
           </li>
         ))}
       </ul>
