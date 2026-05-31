@@ -10,17 +10,17 @@ The app analyzes a public website or company/product name, builds local market-s
 
 - **Frontend:** Next.js App Router, React, TypeScript, Tailwind CSS, lucide-react.
 - **Backend:** Next.js route handlers at `app/api/analyze/route.ts` and `app/api/analyze/[jobId]/route.ts`.
-- **Job execution:** Local in-memory analysis jobs with persisted snapshots in `output/reports`.
+- **Job execution:** Durable analysis jobs in Supabase when `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are configured; local in-memory jobs with JSON snapshots in `output/reports` otherwise.
 - **Website retrieval:** Bright Data Web Unlocker API when credentials are present, direct fetch fallback in demo mode.
 - **Market discovery:** Bright Data SERP API via the REST `/request` endpoint, optional Bright Data remote MCP search/scrape/social tools, then Bright Data Reddit, X, LinkedIn, and YouTube Scraper APIs for social posts, videos, and comments found in search results.
 - **Reasoning:** OpenAI Responses API with JSON Schema structured outputs.
 - **Evidence layer:** Deterministic source scoring and quote extraction before OpenAI synthesis.
-- **Persistence:** Local job/report JSON snapshots. This is intended for local MVP development, not multi-user production durability.
+- **Persistence:** Supabase `analysis_jobs` and `analysis_events` tables for Vercel production runs, with local JSON snapshots as the development fallback.
 
 ## Data Flow
 
 1. User enters a product, company, public domain, or category.
-2. `POST /api/analyze` creates a local analysis job and returns a job ID immediately.
+2. `POST /api/analyze` creates an analysis job and returns a job ID immediately.
 3. The frontend polls `GET /api/analyze/:jobId` for progress and can stop the job with `DELETE /api/analyze/:jobId`.
 4. Server retrieves website content when a URL/domain is provided.
 5. Server builds a local market profile and evidence-seeking query templates.
@@ -29,7 +29,7 @@ The app analyzes a public website or company/product name, builds local market-s
 8. Reddit URLs are enriched with Bright Data Reddit Posts API records, with Reddit Comments API collection attempted as a short best-effort pass. X/Twitter status URLs are enriched with Bright Data X Posts API records; replies are treated as comment evidence when the structured record exposes parent reply metadata. LinkedIn post URLs are enriched with Bright Data LinkedIn Posts API records. YouTube video URLs are enriched with Bright Data YouTube Videos API records and a best-effort YouTube Comments API pass.
 9. Server applies the selected time window, scores and normalizes source evidence, prioritizing direct pain/request/comparison language.
 10. OpenAI synthesizes the final report with ranked pain points, citations, confidence, caveats, and next steps.
-11. The completed job snapshot is saved to `output/reports/<jobId>.json` and rendered by the dashboard.
+11. The completed job snapshot is saved to Supabase in production or `output/reports/<jobId>.json` locally, then rendered by the dashboard.
 
 ## Setup
 
@@ -60,9 +60,14 @@ BRIGHTDATA_SERP_ZONE=serp_api1
 BRIGHTDATA_WEB_UNLOCKER_ZONE=web_unlocker1
 BRIGHTDATA_COUNTRY=us
 BRIGHTDATA_MCP_URL=https://mcp.brightdata.com/sse?token=<token>&groups=advanced_scraping,social
+
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<server-only-service-role-key>
 ```
 
 Only server-side variables are used. Do not expose these as `NEXT_PUBLIC_*`.
+
+Before using the Supabase-backed Vercel flow, run `supabase/social_insight_analysis_jobs.sql` in the Supabase SQL Editor for the configured project. The service role key is required because the server writes private job state while Row Level Security stays enabled.
 
 ## Bright Data Integration Details
 

@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
-import { runAnalysisJobInline, startAnalysisJob } from "@/lib/analysis-jobs";
+import { after } from "next/server";
+import { createAnalysisJob, runAnalysisJob, runAnalysisJobInline, startAnalysisJob } from "@/lib/analysis-jobs";
+import { hasSupabaseAnalysisStore } from "@/lib/supabase-analysis-store";
 import { SEARCH_DEPTH_OPTIONS, SUPPORTED_SOURCE_OPTIONS, TIME_WINDOW_OPTIONS } from "@/lib/types";
 import type { AnalysisMode, AnalyzeJobResponse, SearchDepth, SupportedSource, TimeWindow } from "@/lib/types";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 600;
 
 const DEFAULT_SUPPORTED_SOURCES = SUPPORTED_SOURCE_OPTIONS.map((source) => source.value);
 
@@ -38,9 +40,20 @@ export async function POST(request: Request) {
       searchDepth,
       sources: sources.length ? sources : DEFAULT_SUPPORTED_SOURCES,
     };
+    if (process.env.VERCEL && hasSupabaseAnalysisStore()) {
+      const job = await createAnalysisJob(input);
+      after(async () => {
+        await runAnalysisJob(job.id, input);
+      });
+      return NextResponse.json<AnalyzeJobResponse>({ ok: true, job }, { status: 202 });
+    }
+
     const job = process.env.VERCEL
       ? await runAnalysisJobInline(input, analysisDeadlineMs())
-      : startAnalysisJob(input);
+      : await startAnalysisJob(input);
+    if (!job) {
+      throw new Error("Analysis job could not be created.");
+    }
     return NextResponse.json<AnalyzeJobResponse>({ ok: true, job }, { status: process.env.VERCEL ? 200 : 202 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unexpected analysis error";

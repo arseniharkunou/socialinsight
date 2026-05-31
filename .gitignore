@@ -13,3 +13,5 @@ pnpm-debug.log*
 tsconfig.tsbuildinfo
 output/playwright/*.png
 output/reports/*.json
+.agents/
+skills-lock.json

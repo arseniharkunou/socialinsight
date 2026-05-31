@@ -20,6 +20,7 @@ const EVIDENCE_LIMITS: Record<SearchDepth, number> = {
   deep: 180,
 };
 const IS_VERCEL = Boolean(process.env.VERCEL);
+const HAS_DURABLE_ANALYSIS_JOBS = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 export async function runAnalysisForInput(
   input: { url: string; analysisMode?: AnalysisMode; timeWindow?: TimeWindow; searchDepth?: SearchDepth; sources?: SupportedSource[] },
@@ -283,7 +284,7 @@ async function runAnalysis(
   try {
     rawSignals = await searchPublicSignals(market.searchQueries, timeWindow, sources, searchDepth, (signals) => setPreviewQuotes?.(previewSignals(signals)));
     setPreviewQuotes?.(previewSignals(rawSignals));
-    if (searchDepth === "deep" && !IS_VERCEL && shouldRunSecondPass(rawSignals)) {
+    if (searchDepth === "deep" && (!IS_VERCEL || HAS_DURABLE_ANALYSIS_JOBS) && shouldRunSecondPass(rawSignals)) {
       const secondPassSignals = await searchPublicSignals(
         buildSecondPassQueries(market, target),
         timeWindow,

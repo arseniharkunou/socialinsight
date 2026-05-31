@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runAnalysisForInput, runAnalysisForInputWithDeadline } from "@/lib/analysis";
+import { appendSupabaseAnalysisEvent, getSupabaseAnalysisJob, hasSupabaseAnalysisStore, saveSupabaseAnalysisJob } from "@/lib/supabase-analysis-store";
 import { SUPPORTED_SOURCE_OPTIONS } from "@/lib/types";
 import type { AnalysisMode, AnalyzeJobSnapshot, LiveQuotePreview, SearchDepth, SupportedSource, TimeWindow } from "@/lib/types";
 
@@ -13,6 +14,7 @@ const REPORT_DIR = process.env.VERCEL
   : path.join(process.cwd(), "output", "reports");
 const jobs = globalThis as typeof globalThis & {
   __painRadarJobs?: Map<string, InternalJob>;
+  __painRadarJobPersistQueues?: Map<string, Promise<void>>;
 };
 
 function jobMap() {
@@ -22,24 +24,49 @@ function jobMap() {
   return jobs.__painRadarJobs;
 }
 
+function persistQueueMap() {
+  if (!jobs.__painRadarJobPersistQueues) {
+    jobs.__painRadarJobPersistQueues = new Map();
+  }
+  return jobs.__painRadarJobPersistQueues;
+}
+
 type AnalysisJobInput = { url: string; analysisMode?: AnalysisMode; timeWindow?: TimeWindow; searchDepth?: SearchDepth; sources?: SupportedSource[] };
 
 const DEFAULT_SUPPORTED_SOURCES = SUPPORTED_SOURCE_OPTIONS.map((source) => source.value);
 
-export function startAnalysisJob(input: AnalysisJobInput) {
+export async function createAnalysisJob(input: AnalysisJobInput) {
   const job = createInternalJob(input);
   jobMap().set(job.id, job);
-  persistJob(job).catch(() => undefined);
-  void runJob(job, input);
+  await persistJob(job);
   return publicJob(job);
 }
 
+export async function startAnalysisJob(input: AnalysisJobInput) {
+  const job = await createAnalysisJob(input);
+  void runAnalysisJob(job.id, input);
+  return job;
+}
+
 export async function runAnalysisJobInline(input: AnalysisJobInput, deadlineMs?: number) {
-  const job = createInternalJob(input);
+  const job = await createAnalysisJob(input);
+  await runAnalysisJob(job.id, input, deadlineMs);
+  return getAnalysisJob(job.id);
+}
+
+export async function runAnalysisJob(id: string, input: AnalysisJobInput, deadlineMs?: number) {
+  const existing = await getAnalysisJob(id);
+  if (!existing) {
+    throw new Error("Analysis job not found.");
+  }
+  if (existing.status === "completed" || existing.status === "failed" || existing.status === "cancelled") {
+    return existing;
+  }
+
+  const job = internalJobFromSnapshot(existing);
   jobMap().set(job.id, job);
-  persistJob(job).catch(() => undefined);
   await runJob(job, input, deadlineMs);
-  return publicJob(job);
+  return getAnalysisJob(id);
 }
 
 function createInternalJob(input: AnalysisJobInput): InternalJob {
@@ -65,7 +92,17 @@ function createInternalJob(input: AnalysisJobInput): InternalJob {
   return job;
 }
 
+function internalJobFromSnapshot(snapshot: AnalyzeJobSnapshot): InternalJob {
+  return {
+    ...snapshot,
+    abortController: new AbortController(),
+  };
+}
+
 export async function getAnalysisJob(id: string) {
+  if (hasSupabaseAnalysisStore()) {
+    return getSupabaseAnalysisJob(id);
+  }
   const memoryJob = jobMap().get(id);
   if (memoryJob) {
     return publicJob(memoryJob);
@@ -74,6 +111,19 @@ export async function getAnalysisJob(id: string) {
 }
 
 export async function cancelAnalysisJob(id: string) {
+  if (hasSupabaseAnalysisStore()) {
+    const persisted = await getSupabaseAnalysisJob(id);
+    if (!persisted) {
+      return null;
+    }
+    const cancelled = {
+      ...persisted,
+      status: "cancelled" as const,
+      error: persisted.error || "Analysis stopped.",
+      completedAt: persisted.completedAt || new Date().toISOString(),
+    };
+    return saveSupabaseAnalysisJob(cancelled);
+  }
   const job = jobMap().get(id);
   if (!job) {
     const persisted = await readPersistedJob(id);
@@ -87,11 +137,11 @@ export async function cancelAnalysisJob(id: string) {
 }
 
 async function runJob(job: InternalJob, input: AnalysisJobInput, deadlineMs?: number) {
-  updateJob(job, { status: "running", stage: "website" });
+  await updateJob(job, { status: "running", stage: "website" });
   let acceptingAnalysisUpdates = true;
   const updateAnalysisStage = (stage: AnalyzeJobSnapshot["stage"]) => {
     if (acceptingAnalysisUpdates) {
-      updateJob(job, { status: "running", stage });
+      void updateJob(job, { status: "running", stage });
     }
   };
   const updateAnalysisQuotes = (previewQuotes: LiveQuotePreview[]) => {
@@ -116,12 +166,13 @@ async function runJob(job: InternalJob, input: AnalysisJobInput, deadlineMs?: nu
       );
     acceptingAnalysisUpdates = false;
 
-    if (job.abortController.signal.aborted || job.status === "cancelled") {
-      updateJob(job, { status: "cancelled", error: "Analysis stopped." });
+    const latestJob = hasSupabaseAnalysisStore() ? await getSupabaseAnalysisJob(job.id) : null;
+    if (job.abortController.signal.aborted || job.status === "cancelled" || latestJob?.status === "cancelled") {
+      await updateJob(job, { status: "cancelled", error: "Analysis stopped." });
       return;
     }
 
-    updateJob(job, {
+    await updateJob(job, {
       status: "completed",
       stage: "synthesis",
       completedAt: new Date().toISOString(),
@@ -130,7 +181,7 @@ async function runJob(job: InternalJob, input: AnalysisJobInput, deadlineMs?: nu
   } catch (error) {
     acceptingAnalysisUpdates = false;
     const aborted = error instanceof DOMException && error.name === "AbortError";
-    updateJob(job, {
+    await updateJob(job, {
       status: aborted ? "cancelled" : "failed",
       error: aborted ? "Analysis stopped." : error instanceof Error ? error.message : "Analysis failed",
       completedAt: new Date().toISOString(),
@@ -138,17 +189,23 @@ async function runJob(job: InternalJob, input: AnalysisJobInput, deadlineMs?: nu
   }
 }
 
-function updateJob(job: InternalJob, patch: Partial<Omit<AnalyzeJobSnapshot, "id" | "createdAt">>) {
+async function updateJob(job: InternalJob, patch: Partial<Omit<AnalyzeJobSnapshot, "id" | "createdAt">>) {
   Object.assign(job, patch, { updatedAt: new Date().toISOString() });
   jobMap().set(job.id, job);
-  persistJob(job).catch(() => undefined);
+  await queuePersistJob(job);
+  if (patch.stage) {
+    appendJobEvent(job.id, { eventType: "stage", stage: patch.stage }).catch(() => undefined);
+  }
+  if (patch.status === "completed" || patch.status === "failed" || patch.status === "cancelled") {
+    appendJobEvent(job.id, { eventType: patch.status, message: patch.error }).catch(() => undefined);
+  }
 }
 
 function updatePreviewQuotes(job: InternalJob, previewQuotes: LiveQuotePreview[]) {
   if (job.abortController.signal.aborted || job.status === "cancelled" || previewQuotes.length === 0) {
     return;
   }
-  updateJob(job, { previewQuotes: mergePreviewQuotes(job.previewQuotes || [], previewQuotes), status: "running" });
+  void updateJob(job, { previewQuotes: mergePreviewQuotes(job.previewQuotes || [], previewQuotes), status: "running" });
 }
 
 function mergePreviewQuotes(currentQuotes: LiveQuotePreview[], nextQuotes: LiveQuotePreview[]) {
@@ -170,12 +227,31 @@ function publicJob(job: InternalJob): AnalyzeJobSnapshot {
 }
 
 async function persistJob(job: InternalJob) {
-  await fs.mkdir(REPORT_DIR, { recursive: true });
+  await persistSnapshot(publicJob(job));
+}
+
+async function queuePersistJob(job: InternalJob) {
   const snapshot = publicJob(job);
-  await fs.writeFile(jobPath(job.id), JSON.stringify(snapshot, null, 2));
+  const queues = persistQueueMap();
+  const previous = queues.get(job.id) || Promise.resolve();
+  const next = previous.catch(() => undefined).then(() => persistSnapshot(snapshot));
+  queues.set(job.id, next.catch(() => undefined));
+  await next;
+}
+
+async function persistSnapshot(snapshot: AnalyzeJobSnapshot) {
+  if (hasSupabaseAnalysisStore()) {
+    await saveSupabaseAnalysisJob(snapshot);
+    return;
+  }
+  await fs.mkdir(REPORT_DIR, { recursive: true });
+  await fs.writeFile(jobPath(snapshot.id), JSON.stringify(snapshot, null, 2));
 }
 
 async function readPersistedJob(id: string) {
+  if (hasSupabaseAnalysisStore()) {
+    return getSupabaseAnalysisJob(id);
+  }
   try {
     const text = await fs.readFile(jobPath(id), "utf8");
     return JSON.parse(text) as AnalyzeJobSnapshot;
@@ -190,4 +266,14 @@ function jobPath(id: string) {
 
 function safeJobId(id: string) {
   return id.replace(/[^a-zA-Z0-9_-]/g, "");
+}
+
+async function appendJobEvent(
+  jobId: string,
+  event: { eventType: string; stage?: AnalyzeJobSnapshot["stage"]; message?: string; payload?: Record<string, unknown> },
+) {
+  if (!hasSupabaseAnalysisStore()) {
+    return;
+  }
+  await appendSupabaseAnalysisEvent(jobId, event);
 }

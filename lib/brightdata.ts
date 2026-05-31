@@ -24,6 +24,7 @@ const YOUTUBE_VIDEOS_DATASET_ID = "gd_lk56epmy2i5g7lzu0k";
 const YOUTUBE_COMMENTS_DATASET_ID = "gd_lk9q0ew71spt1mxywf";
 const MAX_WEBSITE_BYTES = 900_000;
 const IS_VERCEL = Boolean(process.env.VERCEL);
+const HAS_DURABLE_ANALYSIS_JOBS = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 type TimeWindowConfig = {
   timeWindow: TimeWindow;
@@ -401,7 +402,7 @@ export async function searchPublicSignals(
 
 function runtimeSearchBudget(searchDepth: SearchDepth): SearchBudget {
   const budget = SEARCH_BUDGETS[searchDepth];
-  if (!IS_VERCEL) {
+  if (!IS_VERCEL || HAS_DURABLE_ANALYSIS_JOBS) {
     return budget;
   }
 
