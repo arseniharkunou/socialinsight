@@ -320,7 +320,7 @@ function PageLogo() {
         <MessageCircleMore size={22} />
       </div>
       <div>
-        <h1 className="text-xl font-semibold leading-tight tracking-normal [font-family:Arial,Helvetica,sans-serif]">Social Insight</h1>
+        <h1 className="text-xl font-semibold leading-tight tracking-normal [font-family:Arial,Helvetica,sans-serif]">PainFinder</h1>
         <p className="text-sm text-[var(--muted)]">Powered by BrightData</p>
       </div>
     </Link>
