@@ -590,7 +590,7 @@ function openAiSynthesisFailureNote(error: unknown) {
   const detail = error instanceof Error ? error.message : "OpenAI provider request failed";
   const quotaOrAuth = /quota|credit|insufficient_quota|401|403|429|api key|billing/i.test(detail);
   if (quotaOrAuth) {
-    return "OpenAI synthesis failed because API credits, quota, billing, rate limits, or authentication need attention. Social Insight collected live public evidence but did not show a generic fallback report because report content must be grounded in that evidence.";
+    return "OpenAI synthesis failed because API credits, quota, billing, rate limits, or authentication need attention. Social Insight did not show a generic fallback report because report content must be grounded in collected evidence.";
   }
 
   return `OpenAI synthesis failed before a grounded report could be generated. Social Insight did not show a generic fallback report. Provider detail: ${detail.slice(0, 260)}`;
