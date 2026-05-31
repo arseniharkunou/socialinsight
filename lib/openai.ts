@@ -207,7 +207,7 @@ export async function synthesizeReport(input: {
     return demoSynthesis(input.market, input.signals, input.analysisMode);
   }
 
-  const signalLimit = input.searchDepth === "deep" ? 220 : 70;
+  const signalLimit = input.searchDepth === "deep" ? 320 : 110;
   const report = await structuredResponse<ReportSynthesis>(
     "painfinder_report",
     reportSchema,

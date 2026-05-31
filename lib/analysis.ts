@@ -1,6 +1,7 @@
 import { demoSignals, fetchWebsiteContent, hasBrightDataCredentials, hasBrightDataMcpCredentials, searchPublicSignals } from "@/lib/brightdata";
 import { extractEvidenceCards } from "@/lib/evidence";
 import { auditReportAgainstEvidence, buildEntityRelevanceContext, buildEvidenceClusters, expandMarketQueriesForEntity, filterAndRankSignalsForRelevance } from "@/lib/insight-quality";
+import type { EntityRelevanceContext } from "@/lib/insight-quality";
 import { buildMarketProfile, inferMarketCategoryFromText, marketDefaultsForCategory } from "@/lib/market";
 import { demoSynthesis, hasOpenAiCredentials, synthesizeReport } from "@/lib/openai";
 import { categoryFromExecutiveSummary, displayExecutiveSummary } from "@/lib/report-title";
@@ -16,8 +17,8 @@ export type AnalysisTarget = {
 };
 
 const EVIDENCE_LIMITS: Record<SearchDepth, number> = {
-  fast: 80,
-  deep: 260,
+  fast: 140,
+  deep: 420,
 };
 const IS_VERCEL = Boolean(process.env.VERCEL);
 const HAS_DURABLE_ANALYSIS_JOBS = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -286,7 +287,7 @@ async function runAnalysis(
     rawSignals = await searchPublicSignals(market.searchQueries, timeWindow, sources, searchDepth, (signals) => setPreviewQuotes?.(previewSignals(signals)));
     usedLivePublicSignals = hasBrightDataCredentials() || hasBrightDataMcpCredentials();
     setPreviewQuotes?.(previewSignals(rawSignals));
-    if (searchDepth === "deep" && (!IS_VERCEL || HAS_DURABLE_ANALYSIS_JOBS) && shouldRunSecondPass(rawSignals)) {
+    if ((!IS_VERCEL || HAS_DURABLE_ANALYSIS_JOBS) && shouldRunSocialExpansionPass(searchDepth, rawSignals)) {
       const secondPassSignals = await searchPublicSignals(
         buildSecondPassQueries(market, target),
         timeWindow,
@@ -295,7 +296,7 @@ async function runAnalysis(
         (signals) => setPreviewQuotes?.(previewSignals(signals)),
       );
       rawSignals = mergeSignals(rawSignals, secondPassSignals);
-      stageNotes.marketDiscovery = `${stageNotes.marketDiscovery}; first-pass social commentary was not deep enough, so deep mode ran a broader second-pass customer-voice sweep`;
+      stageNotes.marketDiscovery = `${stageNotes.marketDiscovery}; ${searchDepthLabel(searchDepth)} ran an additional social-commentary sweep because first-pass public conversation coverage was thin`;
       setPreviewQuotes?.(previewSignals(rawSignals));
     }
   } catch (error) {
@@ -307,6 +308,7 @@ async function runAnalysis(
   }
   const beforeRelevanceCount = rawSignals.length;
   rawSignals = filterAndRankSignalsForRelevance(rawSignals, relevanceContext);
+  rawSignals = suppressCompanyOwnedSignals(rawSignals, relevanceContext, searchDepth);
   if (rawSignals.length < beforeRelevanceCount) {
     stageNotes.marketDiscovery = `${stageNotes.marketDiscovery}; relevance filter retained ${rawSignals.length} of ${beforeRelevanceCount} collected signals for the target entity/category`;
   }
@@ -415,11 +417,35 @@ function refineGenericMarketCategory(market: MarketProfile, signals: Evidence[])
   };
 }
 
-function shouldRunSecondPass(signals: MarketSignal[]) {
-  if (signals.length < 220) {
+function shouldRunSocialExpansionPass(searchDepth: SearchDepth, signals: MarketSignal[]) {
+  const customerVoiceCount = signals.filter((signal) => isCustomerVoiceSignal(signal)).length;
+  if (searchDepth === "fast") {
+    return signals.length < 180 || customerVoiceCount < 120;
+  }
+  if (signals.length < 520) {
     return true;
   }
-  return signals.filter((signal) => isCustomerVoiceSignal(signal)).length < 90;
+  return customerVoiceCount < 260;
+}
+
+function suppressCompanyOwnedSignals(signals: MarketSignal[], context: EntityRelevanceContext, searchDepth: SearchDepth) {
+  if (!context.domain && !context.domainToken) {
+    return signals;
+  }
+  const publicSignals = signals.filter((signal) => !isCompanyOwnedSignal(signal, context));
+  const minimumPublicSignals = searchDepth === "deep" ? 90 : 45;
+  return publicSignals.length >= minimumPublicSignals ? publicSignals : signals;
+}
+
+function isCompanyOwnedSignal(signal: MarketSignal, context: EntityRelevanceContext) {
+  const host = safeHostname(signal.url);
+  if (!host) {
+    return false;
+  }
+  if (context.domain && (host === context.domain || host.endsWith(`.${context.domain}`))) {
+    return true;
+  }
+  return Boolean(context.domainToken && (host === `${context.domainToken}.com` || host.includes(`.${context.domainToken}.com`)));
 }
 
 function isCustomerVoiceSignal(signal: MarketSignal) {
