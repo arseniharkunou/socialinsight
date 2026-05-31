@@ -17,8 +17,8 @@ export type AnalysisTarget = {
 };
 
 const EVIDENCE_LIMITS: Record<SearchDepth, number> = {
-  fast: 140,
-  deep: 420,
+  fast: 220,
+  deep: 700,
 };
 const IS_VERCEL = Boolean(process.env.VERCEL);
 const HAS_DURABLE_ANALYSIS_JOBS = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -331,9 +331,12 @@ async function runAnalysis(
   try {
     synthesized = await synthesizeReport({ url: target.modelTarget, market, signals, evidenceClusters, mode, analysisMode: target.analysisMode, searchDepth });
   } catch (error) {
-    const note = providerFailureNote("OpenAI report synthesis", error);
+    const note = openAiSynthesisFailureNote(error);
     providerNotes.push(note);
     stageNotes.synthesis = stageNotes.synthesis === note ? note : `${stageNotes.synthesis} ${note}`;
+    if (hasOpenAiCredentials()) {
+      throw new Error(note);
+    }
     mode = "demo";
     synthesized = demoSynthesis(market, signals);
   }
@@ -581,6 +584,16 @@ function providerFailureNote(label: string, error: unknown) {
   const detail = error instanceof Error ? error.message : "provider request failed";
   const quotaOrAuth = /quota|401|403|429|api key|billing/i.test(detail);
   return `${label} fell back to demo output${quotaOrAuth ? " because credentials, billing, or quota need attention." : "."}`;
+}
+
+function openAiSynthesisFailureNote(error: unknown) {
+  const detail = error instanceof Error ? error.message : "OpenAI provider request failed";
+  const quotaOrAuth = /quota|credit|insufficient_quota|401|403|429|api key|billing/i.test(detail);
+  if (quotaOrAuth) {
+    return "OpenAI synthesis failed because API credits, quota, billing, rate limits, or authentication need attention. Social Insight collected live public evidence but did not show a generic fallback report because report content must be grounded in that evidence.";
+  }
+
+  return `OpenAI synthesis failed before a grounded report could be generated. Social Insight did not show a generic fallback report. Provider detail: ${detail.slice(0, 260)}`;
 }
 
 function timeWindowLabel(timeWindow: TimeWindow) {

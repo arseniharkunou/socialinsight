@@ -10,6 +10,8 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
+    "test": "npm run test:quality",
+    "test:quality": "node scripts/test-report-quality.mjs",
     "check:integrations": "node scripts/check-integrations.mjs"
   },
   "dependencies": {

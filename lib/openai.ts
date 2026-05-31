@@ -207,7 +207,7 @@ export async function synthesizeReport(input: {
     return demoSynthesis(input.market, input.signals, input.analysisMode);
   }
 
-  const signalLimit = input.searchDepth === "deep" ? 500 : 180;
+  const signalLimit = input.searchDepth === "deep" ? 700 : 240;
   const report = await structuredResponse<ReportSynthesis>(
     "painfinder_report",
     reportSchema,
@@ -222,7 +222,7 @@ Rules:
 - The target may be any company, product, service, nonprofit, healthcare provider, device, marketplace, app, or domain. Do not assume any specific category, business model, buyer, or use case unless the provided website text or public signals directly support it.
 - If the market profile category conflicts with the public signals, correct course silently in the report content. Never write "not [category]" or "rather than [category]" in the executive summary; summarize only the supported category and put category uncertainty in whatNotToTrustYet.
 - Prefer specific customer, buyer, patient, operator, or end-user pains over generic "better UX" claims.
-- Rank pain points by severity, frequency, and confidence.
+- Return every materially distinct recurring pain point that is supported by evidence. Do not cap the report at 5 pains; rank all supported pains by severity, frequency, and confidence. It is acceptable to return 5, 12, or 20 pain points depending on the evidence, but do not invent weak filler.
 - Use a 0-100 scoring scale, never 0-10.
 - Severity: 80-100 means the issue blocks adoption, causes churn, wastes major time, creates revenue/customer risk, or forces ugly workarounds; 60-79 means materially costly but workable; 40-59 means noticeable friction; below 40 means weak inconvenience.
 - Frequency: 80-100 means repeated across many independent sources, threads, comments, reviews, or communities; 60-79 means several independent sources; 40-59 means more than once but limited spread; below 40 means isolated evidence.
