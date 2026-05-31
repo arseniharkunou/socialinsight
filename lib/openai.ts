@@ -207,7 +207,7 @@ export async function synthesizeReport(input: {
     return demoSynthesis(input.market, input.signals, input.analysisMode);
   }
 
-  const signalLimit = input.searchDepth === "deep" ? 100 : 40;
+  const signalLimit = input.searchDepth === "deep" ? 220 : 70;
   const report = await structuredResponse<ReportSynthesis>(
     "painfinder_report",
     reportSchema,
@@ -216,6 +216,8 @@ export async function synthesizeReport(input: {
 Goal: identify recurring customer pain points, positive themes, frustrations, feature requests, workarounds, competitor mentions, and product opportunities from public web signals.
 
 Rules:
+- Prioritize what people say in public conversations over what the company says about itself. Reddit posts/comments, X posts/replies, LinkedIn posts, YouTube comments, forums, reviews, and third-party discussions should drive the analysis.
+- Treat company-owned websites, official docs, press releases, landing pages, and sales copy as context only. Do not use them as primary support for pain points unless no public conversation evidence exists, and lower confidence if a claim is not backed by public discussion.
 - Distinguish evidence from inference.
 - The target may be any company, product, service, nonprofit, healthcare provider, device, marketplace, app, or domain. Do not assume any specific category, business model, buyer, or use case unless the provided website text or public signals directly support it.
 - If the market profile category conflicts with the public signals, correct course silently in the report content. Never write "not [category]" or "rather than [category]" in the executive summary; summarize only the supported category and put category uncertainty in whatNotToTrustYet.
@@ -233,6 +235,7 @@ Rules:
 - If analysis mode is "category", search the evidence for competing products and vendors in the category. In competitors, include identified competitors with sentiment derived from the cited source evidence: positive means users praise or prefer it, negative means users complain or switch away, mixed means both positive and negative signals appear, neutral means it is only mentioned or compared without clear sentiment.
 - Use the evidence clusters as the primary guide for recurring themes. Prefer pain points supported by clusters with multiple sources, customer-voice evidence, and representative quotes.
 - Separate validated target-specific pains from broader category-level hypotheses. If a pain is category-level rather than target-specific, say so clearly and lower confidence.
+- For deep search, synthesize across platform-level patterns: Reddit for high-context complaints and workarounds, X for short-form sentiment and objections, LinkedIn for professional buyer/operator commentary, and YouTube/comments for practitioner reactions. Call out when a theme appears on only one platform.
 
 Analysis mode: ${input.analysisMode || "company"}
 Search depth: ${input.searchDepth || "fast"}

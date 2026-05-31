@@ -16,8 +16,8 @@ export type AnalysisTarget = {
 };
 
 const EVIDENCE_LIMITS: Record<SearchDepth, number> = {
-  fast: 60,
-  deep: 180,
+  fast: 80,
+  deep: 260,
 };
 const IS_VERCEL = Boolean(process.env.VERCEL);
 const HAS_DURABLE_ANALYSIS_JOBS = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
@@ -105,7 +105,7 @@ export function buildFallbackReportForInput(
   rawSignals = filterAndRankSignalsForRelevance(rawSignals, relevanceContext, { allowFallback: true });
   market = refineGenericMarketCategory(market, rawSignals);
   const sentimentTrend = buildSentimentTrend(rawSignals, timeWindow, generatedAt);
-  const signals = extractEvidenceCards(rawSignals, market, { limit: EVIDENCE_LIMITS[searchDepth], diversify: searchDepth === "deep" });
+  const signals = extractEvidenceCards(rawSignals, market, { limit: EVIDENCE_LIMITS[searchDepth], diversify: true, socialFirst: true });
   const evidenceClusters = buildEvidenceClusters(signals);
   let synthesized = demoSynthesis(market, signals, target.analysisMode);
   synthesized = validateEvidenceIds(synthesized, signals);
@@ -293,7 +293,7 @@ async function runAnalysis(
         (signals) => setPreviewQuotes?.(previewSignals(signals)),
       );
       rawSignals = mergeSignals(rawSignals, secondPassSignals);
-      stageNotes.marketDiscovery = `${stageNotes.marketDiscovery}; thin first-pass evidence triggered a broader second-pass customer-voice sweep`;
+      stageNotes.marketDiscovery = `${stageNotes.marketDiscovery}; first-pass social commentary was not deep enough, so deep mode ran a broader second-pass customer-voice sweep`;
       setPreviewQuotes?.(previewSignals(rawSignals));
     }
   } catch (error) {
@@ -314,7 +314,7 @@ async function runAnalysis(
 
   throwIfAborted(signal);
   setStage("evidence");
-  const signals = extractEvidenceCards(rawSignals, market, { limit: EVIDENCE_LIMITS[searchDepth], diversify: searchDepth === "deep" });
+  const signals = extractEvidenceCards(rawSignals, market, { limit: EVIDENCE_LIMITS[searchDepth], diversify: true, socialFirst: true });
   const evidenceClusters = buildEvidenceClusters(signals);
   setPreviewQuotes?.(previewQuotesFromEvidence(signals, market, target));
 
@@ -414,10 +414,10 @@ function refineGenericMarketCategory(market: MarketProfile, signals: Evidence[])
 }
 
 function shouldRunSecondPass(signals: MarketSignal[]) {
-  if (signals.length < 90) {
+  if (signals.length < 220) {
     return true;
   }
-  return signals.filter((signal) => isCustomerVoiceSignal(signal)).length < 24;
+  return signals.filter((signal) => isCustomerVoiceSignal(signal)).length < 90;
 }
 
 function isCustomerVoiceSignal(signal: MarketSignal) {
@@ -436,6 +436,16 @@ function buildSecondPassQueries(market: MarketProfile, target: AnalysisTarget) {
   const domain = domainFromAnalysisTarget(target.modelTarget);
   return uniqueStrings([
     ...market.searchQueries,
+    `"${product}" what people are saying`,
+    `"${product}" reddit`,
+    `"${product}" twitter`,
+    `"${product}" linkedin`,
+    `"${product}" user experience`,
+    `"${product}" customer experience`,
+    `"${product}" anyone using`,
+    `"${product}" worth it`,
+    `"${product}" love`,
+    `"${product}" hate`,
     `"${product}" customer complaints`,
     `"${product}" user feedback`,
     `"${product}" positive reviews`,
@@ -448,6 +458,11 @@ function buildSecondPassQueries(market: MarketProfile, target: AnalysisTarget) {
     `"${product}" competitors alternatives`,
     ...(domain ? [`"${domain}" reviews`, `"${domain}" positive reviews`, `"${domain}" testimonials`, `"${domain}" complaints`] : []),
     `"${category}" customer pain points`,
+    `"${category}" what people are saying`,
+    `"${category}" reddit`,
+    `"${category}" twitter`,
+    `"${category}" linkedin`,
+    `"${category}" user experience`,
     `"${category}" positive reviews`,
     `"${category}" customer success stories`,
     `"${category}" implementation complaints`,

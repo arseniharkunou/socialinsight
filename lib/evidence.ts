@@ -28,23 +28,23 @@ const REQUEST_TERMS = ["feature request", "wish", "need", "would like", "should 
 const COMPARISON_TERMS = ["alternative", "competitor", "versus", " vs ", "switching from", "migrated from", "compared to"];
 
 const SOURCE_WEIGHTS: Record<SourceType, number> = {
-  reddit_comment: 34,
-  reddit_post: 30,
+  reddit_comment: 42,
+  reddit_post: 38,
   review: 28,
   forum: 25,
   social: 22,
-  x_comment: 32,
-  x_post: 29,
-  linkedin_post: 24,
-  youtube_comment: 31,
+  x_comment: 40,
+  x_post: 36,
+  linkedin_post: 34,
+  youtube_comment: 36,
   youtube_video: 23,
-  article: 18,
-  serp: 12,
-  website: 10,
+  article: 10,
+  serp: 7,
+  website: 2,
   demo: 2,
 };
 
-export function extractEvidenceCards(signals: MarketSignal[], market: MarketProfile, options: { limit?: number; diversify?: boolean } = {}) {
+export function extractEvidenceCards(signals: MarketSignal[], market: MarketProfile, options: { limit?: number; diversify?: boolean; socialFirst?: boolean } = {}) {
   const limit = options.limit || 60;
   const seen = new Set<string>();
   const rankedSignals = signals
@@ -70,23 +70,32 @@ export function extractEvidenceCards(signals: MarketSignal[], market: MarketProf
       seen.add(key);
       return true;
     });
-  return selectEvidenceByDiversity(rankedSignals, limit, Boolean(options.diversify))
+  return selectEvidenceByDiversity(rankedSignals, limit, Boolean(options.diversify || options.socialFirst), Boolean(options.socialFirst))
     .map(({ evidenceScore: _evidenceScore, ...signal }) => signal);
 }
 
-function selectEvidenceByDiversity<T extends MarketSignal & { evidenceScore: number }>(signals: T[], limit: number, diversify: boolean) {
+function selectEvidenceByDiversity<T extends MarketSignal & { evidenceScore: number }>(signals: T[], limit: number, diversify: boolean, socialFirst: boolean) {
   if (!diversify) {
     return signals.slice(0, limit);
   }
 
-  const familyCaps = {
-    reddit: Math.ceil(limit * 0.28),
-    linkedin: Math.ceil(limit * 0.2),
-    x: Math.ceil(limit * 0.18),
-    youtube: Math.ceil(limit * 0.16),
-    web: Math.ceil(limit * 0.35),
-    other: Math.ceil(limit * 0.12),
-  };
+  const familyCaps = socialFirst
+    ? {
+        reddit: Math.ceil(limit * 0.36),
+        linkedin: Math.ceil(limit * 0.24),
+        x: Math.ceil(limit * 0.24),
+        youtube: Math.ceil(limit * 0.12),
+        web: Math.ceil(limit * 0.08),
+        other: Math.ceil(limit * 0.08),
+      }
+    : {
+        reddit: Math.ceil(limit * 0.28),
+        linkedin: Math.ceil(limit * 0.2),
+        x: Math.ceil(limit * 0.18),
+        youtube: Math.ceil(limit * 0.16),
+        web: Math.ceil(limit * 0.35),
+        other: Math.ceil(limit * 0.12),
+      };
   const counts: Record<keyof typeof familyCaps, number> = {
     reddit: 0,
     linkedin: 0,
@@ -136,8 +145,9 @@ function evidenceScore(signal: MarketSignal, market: MarketProfile, index: numbe
   const marketScore = marketTerms(market).filter((term) => text.includes(term)).length * 3;
   const quoteScore = strongestQuote(signal).length > 40 ? 8 : 0;
   const freshnessProxy = Math.max(0, 8 - Math.floor(index / 8));
+  const publicDiscussionScore = isPublicDiscussion(signal) ? 10 : 0;
 
-  return sourceWeight + painScore + requestScore + comparisonScore + marketScore + quoteScore + freshnessProxy;
+  return sourceWeight + painScore + requestScore + comparisonScore + marketScore + quoteScore + freshnessProxy + publicDiscussionScore;
 }
 
 function evidenceLabels(signal: MarketSignal) {
@@ -181,6 +191,16 @@ function sourceMetricText(signal: MarketSignal) {
     parts.push(`Query: ${signal.query}`);
   }
   return parts.join(". ");
+}
+
+function isPublicDiscussion(signal: MarketSignal) {
+  return (
+    signal.sourceType.startsWith("reddit") ||
+    signal.sourceType.startsWith("x_") ||
+    signal.sourceType === "linkedin_post" ||
+    signal.sourceType.startsWith("youtube") ||
+    /reddit\.com|x\.com|twitter\.com|linkedin\.com|youtube\.com|youtu\.be/i.test(signal.url)
+  );
 }
 
 function marketTerms(market: MarketProfile) {

@@ -279,8 +279,9 @@ function scoreSignalRelevance(signal: MarketSignal, context: EntityRelevanceCont
   if (productHit) score += context.ambiguousTarget ? 14 : 22;
   score += Math.min(30, categoryHits * 9);
   score += Math.min(18, positiveHits * 3);
-  if (customerVoice) score += 14;
-  if (companyAuthored) score -= 6;
+  if (customerVoice) score += 24;
+  if (companyAuthored && !customerVoice) score -= 34;
+  if (companyAuthored && customerVoice) score -= 4;
   if (context.ambiguousTarget && productHit && categoryHits === 0 && !domainHit) score -= 34;
   score -= excludedHits * 28;
   score -= Math.min(12, Math.floor(index / 20));

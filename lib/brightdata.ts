@@ -75,44 +75,44 @@ type SearchBudget = {
 
 const SEARCH_BUDGETS: Record<SearchDepth, SearchBudget> = {
   fast: {
-    finalSignals: 60,
-    earlyPreviewSignals: 12,
-    restQueries: { base: 8, reddit: 2, x: 4, linkedin: 3, youtube: 3 },
-    mcpQueries: { base: 4, reddit: 1, x: 2, linkedin: 2, youtube: 2 },
-    serpResultsPerQuery: 8,
+    finalSignals: 90,
+    earlyPreviewSignals: 16,
+    restQueries: { base: 5, reddit: 5, x: 6, linkedin: 5, youtube: 3 },
+    mcpQueries: { base: 2, reddit: 2, x: 3, linkedin: 3, youtube: 2 },
+    serpResultsPerQuery: 10,
     mcpScrapeUrls: 3,
-    redditUrls: 3,
-    redditCommentUrls: 1,
-    redditKeywordQueries: 1,
-    redditPostsPerQuery: 5,
-    redditPostParseLimit: 12,
-    redditCommentParseLimit: 30,
-    xUrls: 6,
-    xParseLimit: 24,
-    linkedinUrls: 6,
-    linkedinParseLimit: 18,
+    redditUrls: 6,
+    redditCommentUrls: 3,
+    redditKeywordQueries: 3,
+    redditPostsPerQuery: 10,
+    redditPostParseLimit: 28,
+    redditCommentParseLimit: 60,
+    xUrls: 12,
+    xParseLimit: 48,
+    linkedinUrls: 12,
+    linkedinParseLimit: 42,
     youtubeUrls: 5,
     youtubeCommentUrls: 2,
     youtubeVideoParseLimit: 12,
     youtubeCommentParseLimit: 30,
   },
   deep: {
-    finalSignals: 180,
-    earlyPreviewSignals: 24,
-    restQueries: { base: 16, reddit: 10, x: 8, linkedin: 8, youtube: 6 },
-    mcpQueries: { base: 8, reddit: 4, x: 4, linkedin: 4, youtube: 3 },
-    serpResultsPerQuery: 12,
+    finalSignals: 320,
+    earlyPreviewSignals: 32,
+    restQueries: { base: 8, reddit: 18, x: 18, linkedin: 18, youtube: 6 },
+    mcpQueries: { base: 4, reddit: 6, x: 6, linkedin: 6, youtube: 3 },
+    serpResultsPerQuery: 15,
     mcpScrapeUrls: 8,
-    redditUrls: 10,
-    redditCommentUrls: 5,
-    redditKeywordQueries: 8,
-    redditPostsPerQuery: 15,
-    redditPostParseLimit: 48,
-    redditCommentParseLimit: 80,
-    xUrls: 16,
-    xParseLimit: 64,
-    linkedinUrls: 18,
-    linkedinParseLimit: 54,
+    redditUrls: 24,
+    redditCommentUrls: 16,
+    redditKeywordQueries: 16,
+    redditPostsPerQuery: 25,
+    redditPostParseLimit: 120,
+    redditCommentParseLimit: 240,
+    xUrls: 40,
+    xParseLimit: 160,
+    linkedinUrls: 40,
+    linkedinParseLimit: 140,
     youtubeUrls: 12,
     youtubeCommentUrls: 6,
     youtubeVideoParseLimit: 36,
@@ -746,24 +746,23 @@ function extractYouTubeVideoUrls(signals: MarketSignal[]) {
 }
 
 function buildXSearchQueries(queries: string[]) {
-  return expandDiscoveryQueries(queries)
+  return expandSocialDiscoveryQueries(queries)
     .map((query) => `(${query}) (site:x.com OR site:twitter.com)`);
 }
 
 function buildRedditSearchQueries(queries: string[]) {
-  return expandDiscoveryQueries(queries)
-    .slice(0, 10)
+  return expandSocialDiscoveryQueries(queries)
     .map((query) => `(${query}) site:reddit.com`);
 }
 
 function buildRedditKeywordQueries(queries: string[]) {
-  return expandDiscoveryQueries(queries)
+  return expandSocialDiscoveryQueries(queries)
     .map((query) => query.replace(/\bsite:[^\s)]+/gi, "").replace(/\s+/g, " ").trim())
     .filter(Boolean);
 }
 
 function buildLinkedInSearchQueries(queries: string[]) {
-  return expandDiscoveryQueries(queries)
+  return expandSocialDiscoveryQueries(queries)
     .map((query) => `(${query}) (site:linkedin.com/posts OR site:linkedin.com/feed/update OR site:linkedin.com/pulse)`);
 }
 
@@ -791,6 +790,34 @@ function expandDiscoveryQueries(queries: string[]) {
     expanded.add(`${cleaned} pricing complaints`);
     expanded.add(`${cleaned} alternatives comparison`);
     expanded.add(`${cleaned} customer reviews`);
+  }
+  return Array.from(expanded);
+}
+
+function expandSocialDiscoveryQueries(queries: string[]) {
+  const expanded = new Set<string>();
+  for (const query of queries) {
+    const cleaned = query.replace(/\s+/g, " ").trim();
+    if (!cleaned) {
+      continue;
+    }
+    expanded.add(cleaned);
+    expanded.add(`${cleaned} customer feedback`);
+    expanded.add(`${cleaned} user feedback`);
+    expanded.add(`${cleaned} people are saying`);
+    expanded.add(`${cleaned} discussion`);
+    expanded.add(`${cleaned} thread`);
+    expanded.add(`${cleaned} comments`);
+    expanded.add(`${cleaned} experience`);
+    expanded.add(`${cleaned} anyone using`);
+    expanded.add(`${cleaned} worth it`);
+    expanded.add(`${cleaned} recommend`);
+    expanded.add(`${cleaned} love`);
+    expanded.add(`${cleaned} hate`);
+    expanded.add(`${cleaned} problem`);
+    expanded.add(`${cleaned} complaints`);
+    expanded.add(`${cleaned} alternatives`);
+    expanded.add(`${cleaned} switched from`);
   }
   return Array.from(expanded);
 }
