@@ -811,6 +811,17 @@ function expandSocialDiscoveryQueries(queries: string[]) {
     if (!cleaned) {
       continue;
     }
+    for (const seed of socialQuerySeeds(cleaned)) {
+      expanded.add(seed);
+      expanded.add(`${seed} feedback`);
+      expanded.add(`${seed} reviews`);
+      expanded.add(`${seed} discussion`);
+      expanded.add(`${seed} comments`);
+      expanded.add(`${seed} experience`);
+      expanded.add(`${seed} recommend`);
+      expanded.add(`${seed} complaints`);
+      expanded.add(`${seed} alternatives`);
+    }
     expanded.add(cleaned);
     expanded.add(`${cleaned} customer feedback`);
     expanded.add(`${cleaned} user feedback`);
@@ -830,6 +841,30 @@ function expandSocialDiscoveryQueries(queries: string[]) {
     expanded.add(`${cleaned} switched from`);
   }
   return Array.from(expanded);
+}
+
+function socialQuerySeeds(query: string) {
+  const seeds = new Set<string>();
+  const quoted = Array.from(query.matchAll(/"([^"]{3,80})"/g)).map((match) => match[1]);
+  for (const term of quoted) {
+    const cleaned = term.replace(/\s+/g, " ").trim();
+    if (cleaned && !/complaints?|frustrating|problem|feedback|reviews?|alternatives?|competitors?/i.test(cleaned)) {
+      seeds.add(`"${cleaned}"`);
+    }
+  }
+
+  const withoutOperators = query
+    .replace(/\b(?:OR|AND)\b/gi, " ")
+    .replace(/\bsite:[^\s)]+/gi, " ")
+    .replace(/[()]/g, " ")
+    .replace(/\b(?:complaints?|frustrating|problem|feedback|reviews?|alternatives?|competitors?|customer|user|positive|recommended|implementation|pricing|reimbursement)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (withoutOperators.length >= 3 && withoutOperators.length <= 80) {
+    seeds.add(`"${withoutOperators.replace(/^"+|"+$/g, "")}"`);
+  }
+
+  return Array.from(seeds).slice(0, 4);
 }
 
 function uniqueStrings(values: string[]) {
