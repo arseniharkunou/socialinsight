@@ -63,6 +63,7 @@ BRIGHTDATA_MCP_URL=https://mcp.brightdata.com/sse?token=<token>&groups=advanced_
 
 SUPABASE_URL=https://dathibrsfkfanuvatquv.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=<server-only-service-role-key>
+OPENAI_TIMEOUT_MS=90000
 ```
 
 Only server-side variables are used. Do not expose these as `NEXT_PUBLIC_*`.
