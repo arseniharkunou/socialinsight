@@ -38,3 +38,4 @@ Social Insight reports must prioritize public customer and market commentary ove
 
 - The pain point panel should render all returned pain points.
 - Source summaries should make social source volume visible so the user can see whether the report is grounded in Reddit, X, LinkedIn, YouTube, or mostly non-social web sources.
+- Dig deeper should keep the original report visible while the enrichment pass runs and should highlight materially new or updated findings.
