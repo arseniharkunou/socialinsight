@@ -261,7 +261,7 @@ export function auditReportAgainstEvidence<T extends Pick<PainRadarReport, "topP
 }
 
 function scoreSignalRelevance(signal: MarketSignal, context: EntityRelevanceContext, index: number) {
-  const text = normalizedText(`${signal.title} ${signal.snippet} ${signal.url} ${signal.query || ""}`);
+  const text = normalizedText(`${signal.title} ${signal.snippet} ${signal.url}`);
   const urlHost = safeHostname(signal.url);
   const excludedHits = context.excludedTerms.filter((term) => text.includes(term)).length;
   const productHit = Boolean(context.domainToken && text.includes(context.domainToken)) || normalizedText(context.productName).split(" ").some((term) => term.length > 3 && text.includes(term));
